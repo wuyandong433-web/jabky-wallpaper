@@ -641,6 +641,7 @@ data class DarkenConfig(
     val triggerMode: DarkenTriggerMode = DarkenTriggerMode.DARK_MODE_ONLY,
     val autoDetectDark: Boolean = true,
     val luminanceThreshold: Float = 0.35f,
+    val targetBrightness: Float = DEFAULT_TARGET_BRIGHTNESS,
     val dimFactor: Float = DEFAULT_DIM_FACTOR,
     val scheduleStartHour: Int = 20,
     val scheduleStartMinute: Int = 0,
@@ -662,6 +663,7 @@ data class DarkenConfig(
 
     fun normalized(): DarkenConfig = copy(
         luminanceThreshold = luminanceThreshold.coerceIn(0.05f, 0.95f),
+        targetBrightness = targetBrightness.coerceIn(MIN_TARGET_BRIGHTNESS, MAX_TARGET_BRIGHTNESS),
         dimFactor = dimFactor.coerceIn(MIN_DIM_FACTOR, MAX_DIM_FACTOR),
         scheduleStartHour = scheduleStartHour.coerceIn(0, 23),
         scheduleStartMinute = scheduleStartMinute.coerceIn(0, 59),
@@ -675,6 +677,7 @@ data class DarkenConfig(
         put("triggerMode", safe.triggerMode.name)
         put("autoDetectDark", safe.autoDetectDark)
         put("luminanceThreshold", safe.luminanceThreshold.toDouble())
+        put("targetBrightness", safe.targetBrightness.toDouble())
         put("dimFactor", safe.dimFactor.toDouble())
         put("scheduleStartHour", safe.scheduleStartHour)
         put("scheduleStartMinute", safe.scheduleStartMinute)
@@ -684,6 +687,9 @@ data class DarkenConfig(
     }
 
     companion object {
+        const val DEFAULT_TARGET_BRIGHTNESS = 0.22f
+        const val MIN_TARGET_BRIGHTNESS = 0.05f
+        const val MAX_TARGET_BRIGHTNESS = 0.65f
         const val DEFAULT_DIM_FACTOR = PageItem.DEFAULT_DIM_FACTOR
         const val MIN_DIM_FACTOR = PageItem.MIN_DIM_FACTOR
         const val MAX_DIM_FACTOR = PageItem.MAX_DIM_FACTOR
@@ -715,14 +721,26 @@ data class DarkenConfig(
                     }
                 }
             }
+            val legacyDimFactor = json.optDouble("dimFactor", DEFAULT_DIM_FACTOR.toDouble())
+                .toFloat()
+                .coerceIn(MIN_DIM_FACTOR, MAX_DIM_FACTOR)
+            val targetBrightness = if (json.has("targetBrightness")) {
+                json.optDouble("targetBrightness", DEFAULT_TARGET_BRIGHTNESS.toDouble())
+                    .toFloat()
+                    .coerceIn(MIN_TARGET_BRIGHTNESS, MAX_TARGET_BRIGHTNESS)
+            } else if (json.has("dimFactor")) {
+                ((1f - legacyDimFactor) * 0.50f).coerceIn(MIN_TARGET_BRIGHTNESS, MAX_TARGET_BRIGHTNESS)
+            } else {
+                DEFAULT_TARGET_BRIGHTNESS
+            }
             return DarkenConfig(
                 enabled = enabled,
                 triggerMode = triggerMode,
                 autoDetectDark = json.optBoolean("autoDetectDark", true),
                 luminanceThreshold = json.optDouble("luminanceThreshold", 0.35).toFloat()
                     .coerceIn(0.05f, 0.95f),
-                dimFactor = json.optDouble("dimFactor", DEFAULT_DIM_FACTOR.toDouble()).toFloat()
-                    .coerceIn(MIN_DIM_FACTOR, MAX_DIM_FACTOR),
+                targetBrightness = targetBrightness,
+                dimFactor = legacyDimFactor,
                 scheduleStartHour = json.optInt("scheduleStartHour", 20).coerceIn(0, 23),
                 scheduleStartMinute = json.optInt("scheduleStartMinute", 0).coerceIn(0, 59),
                 scheduleEndHour = json.optInt("scheduleEndHour", 7).coerceIn(0, 23),

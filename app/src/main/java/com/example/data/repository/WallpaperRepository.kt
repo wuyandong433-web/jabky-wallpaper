@@ -111,11 +111,25 @@ class WallpaperRepository private constructor(private val context: Context) {
         }
     }
 
+    fun getEditorPreviewSplitFraction(): Float =
+        prefs.getFloat("editor_preview_split_fraction", DEFAULT_EDITOR_SPLIT_FRACTION)
+            .coerceIn(MIN_EDITOR_SPLIT_FRACTION, MAX_EDITOR_SPLIT_FRACTION)
+
+    fun saveEditorPreviewSplitFraction(fraction: Float) {
+        prefs.edit()
+            .putFloat(
+                "editor_preview_split_fraction",
+                fraction.coerceIn(MIN_EDITOR_SPLIT_FRACTION, MAX_EDITOR_SPLIT_FRACTION)
+            )
+            .apply()
+    }
+
     private data class DarkenedCacheKey(
         val pageIndex: Int,
         val width: Int,
         val height: Int,
-        val dimPercent: Int
+        val targetBrightnessPercent: Int,
+        val autoDetectDark: Boolean
     )
 
     // Bitmap cache for fast Live Wallpaper Engine rendering
@@ -322,7 +336,7 @@ class WallpaperRepository private constructor(private val context: Context) {
         }
         val pagesChanged = newState.pages != previousState.pages
         val darkenCacheConfigChanged =
-            newState.darken.dimFactor != previousState.darken.dimFactor ||
+            newState.darken.targetBrightness != previousState.darken.targetBrightness ||
                 newState.darken.autoDetectDark != previousState.darken.autoDetectDark
         if (normalPagesChanged) {
             invalidateCache()
@@ -564,8 +578,7 @@ class WallpaperRepository private constructor(private val context: Context) {
     }
 
     fun shouldDarkenPage(page: PageItem?, darken: DarkenConfig = _appState.value.darken): Boolean {
-        if (page == null || page.isBlank) return false
-        if (darken.autoDetectDark && page.isAlreadyDark) return false
+        if (page == null || page.isBlank || page.isAlreadyDark) return false
         return true
     }
 
@@ -588,20 +601,24 @@ class WallpaperRepository private constructor(private val context: Context) {
         }
     }
 
-    private fun effectiveDimFactorFor(page: PageItem): Float =
-        page.dimFactor.coerceIn(PageItem.MIN_DIM_FACTOR, PageItem.MAX_DIM_FACTOR)
+    private fun effectiveTargetBrightnessFor(darken: DarkenConfig): Float =
+        darken.targetBrightness.coerceIn(
+            DarkenConfig.MIN_TARGET_BRIGHTNESS,
+            DarkenConfig.MAX_TARGET_BRIGHTNESS
+        )
 
-    private fun dimPercentFor(page: PageItem): Int =
-        (effectiveDimFactorFor(page) * 100f)
+    private fun targetBrightnessPercentFor(darken: DarkenConfig): Int =
+        (effectiveTargetBrightnessFor(darken) * 100f)
             .let { kotlin.math.round(it).toInt() }
-            .coerceIn(10, 90)
+            .coerceIn(5, 65)
 
     private fun computeDarkenedSignature(
         page: PageItem,
         reqWidth: Int,
         reqHeight: Int,
         usesParallax: Boolean,
-        dimPercent: Int
+        targetBrightnessPercent: Int,
+        autoDetectDark: Boolean
     ): String {
         val fileStamp = if (page.originalId == null) {
             val fileName = page.croppedFileName ?: "starter_page_${page.pageIndex}.jpg"
@@ -612,6 +629,7 @@ class WallpaperRepository private constructor(private val context: Context) {
             "${media?.fileName.orEmpty()}_${media?.dateAdded ?: 0L}"
         }
         val raw = buildString {
+            append("norm_v1").append('|')
             append(page.pageIndex).append('|')
             append(page.originalId.orEmpty()).append('|')
             append(page.croppedFileName.orEmpty()).append('|')
@@ -628,7 +646,8 @@ class WallpaperRepository private constructor(private val context: Context) {
             append(page.cropScale).append('|')
             append(if (usesParallax) page.parallaxAmount else 0f).append('|')
             append(reqWidth).append('x').append(reqHeight).append('|')
-            append(dimPercent)
+            append(targetBrightnessPercent).append('|')
+            append(autoDetectDark)
         }
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest(raw.toByteArray(Charsets.UTF_8))
@@ -669,10 +688,18 @@ class WallpaperRepository private constructor(private val context: Context) {
         reqHeight: Int,
         usesParallax: Boolean = false
     ): File? {
-        val page = _appState.value.pages.find { it.pageIndex == pageIndex } ?: return null
-        val dimPercent = dimPercentFor(page)
+        val state = _appState.value
+        val page = state.pages.find { it.pageIndex == pageIndex } ?: return null
+        val targetPercent = targetBrightnessPercentFor(state.darken)
         val tag = if (usesParallax) "px" else "cr"
-        val sig = computeDarkenedSignature(page, reqWidth, reqHeight, usesParallax, dimPercent)
+        val sig = computeDarkenedSignature(
+            page = page,
+            reqWidth = reqWidth,
+            reqHeight = reqHeight,
+            usesParallax = usesParallax,
+            targetBrightnessPercent = targetPercent,
+            autoDetectDark = state.darken.autoDetectDark
+        )
         return File(darkenedCacheDir, "dark_p${pageIndex}_${tag}_${reqWidth}x${reqHeight}_${sig}.jpg")
     }
 
@@ -688,9 +715,17 @@ class WallpaperRepository private constructor(private val context: Context) {
         if (darkened && shouldDarkenPage(page, state.darken)) {
             val safePage = page!!
             val media = safePage.originalId?.let { id -> _originals.value.find { it.id == id } }
+            val targetBrightness = effectiveTargetBrightnessFor(state.darken)
+            val targetPercent = targetBrightnessPercentFor(state.darken)
+            val autoDetect = state.darken.autoDetectDark
             if (media != null && safePage.parallaxAmount > 0f) {
-                val dimPercent = dimPercentFor(safePage)
-                val darkKey = DarkenedCacheKey(pageIndex, reqWidth, reqHeight, dimPercent)
+                val darkKey = DarkenedCacheKey(
+                    pageIndex,
+                    reqWidth,
+                    reqHeight,
+                    targetPercent,
+                    autoDetect
+                )
                 synchronized(darkenedParallaxBitmapCache) {
                     darkenedParallaxBitmapCache[darkKey]?.let {
                         if (!it.bitmap.isRecycled) return it
@@ -701,7 +736,8 @@ class WallpaperRepository private constructor(private val context: Context) {
                     reqWidth,
                     reqHeight,
                     usesParallax = true,
-                    dimPercent = dimPercent
+                    targetBrightnessPercent = targetPercent,
+                    autoDetectDark = autoDetect
                 )
                 val filePrefix = "dark_p${pageIndex}_px_${reqWidth}x${reqHeight}_"
                 val baseName = "${filePrefix}${sig}"
@@ -740,9 +776,10 @@ class WallpaperRepository private constructor(private val context: Context) {
                     }
                     val normal = getParallaxBitmap(pageIndex, reqWidth, reqHeight, darkened = false)
                         ?: return null
-                    val darkenedBitmap = ImageProcessingUtils.createDarkenedCopy(
-                        normal.bitmap,
-                        effectiveDimFactorFor(safePage)
+                    val darkenedBitmap = ImageProcessingUtils.createNormalizedDarkenedCopy(
+                        srcBmp = normal.bitmap,
+                        targetBrightness = targetBrightness,
+                        skipIfAlreadyBelowTarget = autoDetect
                     )
                     writeBitmapAtomicallyToCache(darkenedBitmap, cacheFile)
                     writeAtomically(metaFile, "${normal.leftTravelPx},${normal.rightTravelPx}")
@@ -763,8 +800,7 @@ class WallpaperRepository private constructor(private val context: Context) {
             if (darkenedCropped.width == reqWidth && darkenedCropped.height == reqHeight) {
                 return ParallaxBitmap(darkenedCropped, 0, 0)
             }
-            val dimPercent = dimPercentFor(safePage)
-            val darkKey = DarkenedCacheKey(pageIndex, reqWidth, reqHeight, dimPercent)
+            val darkKey = DarkenedCacheKey(pageIndex, reqWidth, reqHeight, targetPercent, autoDetect)
             synchronized(darkenedParallaxBitmapCache) {
                 darkenedParallaxBitmapCache[darkKey]?.let {
                     if (!it.bitmap.isRecycled) return it
@@ -838,8 +874,10 @@ class WallpaperRepository private constructor(private val context: Context) {
 
         if (darkened && shouldDarkenPage(page, state.darken)) {
             val safePage = page!!
-            val dimPercent = dimPercentFor(safePage)
-            val darkKey = DarkenedCacheKey(pageIndex, reqWidth, reqHeight, dimPercent)
+            val targetBrightness = effectiveTargetBrightnessFor(state.darken)
+            val targetPercent = targetBrightnessPercentFor(state.darken)
+            val autoDetect = state.darken.autoDetectDark
+            val darkKey = DarkenedCacheKey(pageIndex, reqWidth, reqHeight, targetPercent, autoDetect)
             synchronized(darkenedBitmapCache) {
                 darkenedBitmapCache[darkKey]?.let {
                     if (!it.isRecycled) return it
@@ -850,7 +888,8 @@ class WallpaperRepository private constructor(private val context: Context) {
                 reqWidth,
                 reqHeight,
                 usesParallax = false,
-                dimPercent = dimPercent
+                targetBrightnessPercent = targetPercent,
+                autoDetectDark = autoDetect
             )
             val filePrefix = "dark_p${pageIndex}_cr_${reqWidth}x${reqHeight}_"
             val baseName = "${filePrefix}${sig}"
@@ -883,9 +922,10 @@ class WallpaperRepository private constructor(private val context: Context) {
                 }
                 val normal = getCroppedBitmap(pageIndex, reqWidth, reqHeight, darkened = false)
                     ?: return null
-                val darkenedBitmap = ImageProcessingUtils.createDarkenedCopy(
-                    normal,
-                    effectiveDimFactorFor(safePage)
+                val darkenedBitmap = ImageProcessingUtils.createNormalizedDarkenedCopy(
+                    srcBmp = normal,
+                    targetBrightness = targetBrightness,
+                    skipIfAlreadyBelowTarget = autoDetect
                 )
                 writeBitmapAtomicallyToCache(darkenedBitmap, cacheFile)
                 pruneStaleDarkenedCacheFiles(filePrefix, baseName)
@@ -1667,6 +1707,9 @@ class WallpaperRepository private constructor(private val context: Context) {
     companion object {
         private const val BACKUP_FILE_NAME = "paperpages_backup.zip"
         private const val MAX_BACKUP_UNCOMPRESSED_BYTES = 1024L * 1024L * 1024L
+        const val DEFAULT_EDITOR_SPLIT_FRACTION = 0.40f
+        const val MIN_EDITOR_SPLIT_FRACTION = 0.22f
+        const val MAX_EDITOR_SPLIT_FRACTION = 0.72f
 
         @Volatile
         private var instance: WallpaperRepository? = null

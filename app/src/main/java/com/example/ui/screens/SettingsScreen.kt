@@ -123,6 +123,99 @@ fun SettingsScreen(viewModel: WallpaperViewModel) {
 }
 
 @Composable
+fun DiagnosticsConditionalDialog(
+    viewModel: WallpaperViewModel,
+    onDismiss: () -> Unit
+) {
+    val diagnostics by WallpaperDiagnosticsRecorder.state.collectAsState()
+    val appState by viewModel.appState.collectAsState()
+    val isWallpaperActive by viewModel.isWallpaperActive.collectAsState()
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .widthIn(max = 560.dp)
+                .heightIn(max = 680.dp)
+                .testTag("diagnostics_conditional_dialog"),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_section_debug),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    DebugOverlaysDashboardCard(
+                        showOffsetOverlay = appState.showOffsetDebugOverlay,
+                        showFrameIndicator = appState.showFrameDebugIndicator,
+                        showSignalOverlay = appState.showSignalDebugOverlay,
+                        onCommit = { offsetOverlay, frameIndicator, signalOverlay ->
+                            viewModel.toggleOffsetDebugOverlay(offsetOverlay)
+                            viewModel.toggleFrameDebugIndicator(frameIndicator)
+                            viewModel.toggleSignalDebugOverlay(signalOverlay)
+                        }
+                    )
+                    WallpaperRecordingDashboardCard(
+                        diagnostics = diagnostics,
+                        isWallpaperActive = isWallpaperActive,
+                        onClearHistory = viewModel::clearDiagnosticsHistory
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("diagnostics_dialog_close_button")
+                    ) {
+                        Text(stringResource(R.string.action_close))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LanguageDashboardCard(
     currentLanguageTag: String,
     onSelectLanguage: (String) -> Unit
@@ -191,7 +284,7 @@ private fun SettingsSection(
 }
 
 @Composable
-private fun DebugOverlaysDashboardCard(
+fun DebugOverlaysDashboardCard(
     showOffsetOverlay: Boolean,
     showFrameIndicator: Boolean,
     showSignalOverlay: Boolean,
@@ -316,7 +409,7 @@ private fun DebugOverlaysDashboardCard(
 }
 
 @Composable
-private fun WallpaperRecordingDashboardCard(
+fun WallpaperRecordingDashboardCard(
     diagnostics: WallpaperDiagnosticsState,
     isWallpaperActive: Boolean,
     onClearHistory: () -> Unit

@@ -62,6 +62,11 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     private val _powerSnapshot = MutableStateFlow(PowerSnapshot())
     val powerSnapshot: StateFlow<PowerSnapshot> = _powerSnapshot.asStateFlow()
 
+    private val _editorPreviewSplitFraction = MutableStateFlow(
+        repository.getEditorPreviewSplitFraction()
+    )
+    val editorPreviewSplitFraction: StateFlow<Float> = _editorPreviewSplitFraction.asStateFlow()
+
     private val batterySaverMonitor = BatterySaverMonitor(application) { snapshot ->
         _powerSnapshot.value = snapshot
     }
@@ -379,11 +384,41 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         repository.updateState { it.copy(darken = normalized) }
     }
 
+    fun updateDarkenAndPageFlags(
+        darkenConfig: DarkenConfig,
+        alreadyDarkByPageIndex: Map<Int, Boolean>
+    ) {
+        val normalized = darkenConfig.normalized()
+        repository.updateState { state ->
+            val updatedPages = state.pages.map { page ->
+                val flag = alreadyDarkByPageIndex[page.pageIndex]
+                if (flag != null && flag != page.isAlreadyDark) {
+                    page.copy(isAlreadyDark = flag)
+                } else {
+                    page
+                }
+            }
+            state.copy(
+                darken = normalized,
+                pages = updatedPages
+            )
+        }
+    }
+
     fun togglePageAlreadyDark(pageIndex: Int, isDark: Boolean) {
         val updated = appState.value.pages.map {
             if (it.pageIndex == pageIndex) it.copy(isAlreadyDark = isDark) else it
         }
         repository.updateState { it.copy(pages = updated) }
+    }
+
+    fun updateEditorPreviewSplitFraction(fraction: Float) {
+        val clamped = fraction.coerceIn(
+            WallpaperRepository.MIN_EDITOR_SPLIT_FRACTION,
+            WallpaperRepository.MAX_EDITOR_SPLIT_FRACTION
+        )
+        _editorPreviewSplitFraction.value = clamped
+        repository.saveEditorPreviewSplitFraction(clamped)
     }
 
     fun exportBackupToFolder(folderUri: String, onResult: (Boolean) -> Unit) {

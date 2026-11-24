@@ -14,6 +14,9 @@
     <string name="cd_apply_live_wallpaper">应用动态壁纸</string>
     <string name="toast_save_page_failed">无法保存页面设置。</string>
     <string name="toast_assign_media_failed">无法设置此图片。</string>
+    <string name="action_close">关闭</string>
+    <string name="cd_conditional_menu_darken">变暗设置与预览</string>
+    <string name="cd_conditional_menu_diagnostics">诊断与调试菜单</string>
 
     <!-- Common Actions & States -->
     <string name="action_confirm">确认</string>
@@ -148,8 +151,15 @@
     <string name="darken_overnight_hint">跨夜定时将在次日早晨结束，点击时间可修改。</string>
     <string name="darken_sameday_hint">当日定时在起止时间之间生效，点击时间可修改。</string>
     <string name="darken_smart_detect_title">智能暗色壁纸识别</string>
-    <string name="darken_smart_detect_desc">检测为暗色或标记为“已是深色”的壁纸不会重复变暗。</string>
-    <string name="darken_page_settings_hint">请在“编辑页面设置”中调整每张壁纸的变暗强度并预览效果。</string>
+    <string name="darken_smart_detect_desc">亮度已低于目标值或标记为“已是深色”的壁纸将自动跳过。</string>
+    <string name="darken_target_brightness_title">变暗后目标亮度</string>
+    <string name="darken_target_brightness_desc">智能平衡亮暗不均的壁纸，使所有页面达到一致的视觉亮度。</string>
+    <string name="darken_multi_preview_title">全页效果预览</string>
+    <string name="darken_preview_mode_darkened">变暗后</string>
+    <string name="darken_preview_mode_original">原图</string>
+    <string name="darken_preview_page_short">第%1$d页</string>
+    <string name="darken_preview_page_dark_chip">深色</string>
+    <string name="darken_preview_tap_hint">点击页面标签可切换“已是深色”标记。</string>
     <string name="darken_pick_start_title">选择开始时间</string>
     <string name="darken_pick_end_title">选择结束时间</string>
     <string name="darken_switch_clock_cd">切换至表盘选择</string>
@@ -159,6 +169,7 @@
     <string name="darken_summary_battery_saver">省电降帧</string>
 
     <!-- Battery Saver -->
+    <string name="battery_saver_title">省电模式</string>
     <string name="battery_saver_section_title">省电模式</string>
     <string name="battery_saver_toggle_title">低电量时降低壁纸刷新率</string>
     <string name="battery_saver_toggle_desc">通过系统广播被动响应电量变化与系统省电模式，无需轮询。</string>
@@ -299,7 +310,10 @@
     <string name="crop_saving">保存中…</string>
     <string name="crop_save_settings">保存页面设置</string>
     <string name="crop_unable_to_load">无法加载图片</string>
-    <string name="crop_darkened_preview_badge">变暗预览 · %1$d%%</string>
+    <string name="crop_preview_mode_single">单页视图</string>
+    <string name="crop_preview_mode_full">完整与视差</string>
+    <string name="crop_preview_switch_cd">切换预览视图</string>
+    <string name="crop_split_divider_cd">上下拖动调整预览与设置高度</string>
     <string name="crop_full_image_title">完整原图：静态页与视差范围</string>
     <string name="crop_legend_static">静态页面</string>
     <string name="crop_legend_reach">最大视差范围</string>

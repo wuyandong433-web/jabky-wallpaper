@@ -1,10 +1,13 @@
 package com.example
 
 import android.app.Application
+import android.app.WallpaperColors
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.os.Build
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -16,18 +19,25 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ApplicationProvider
 import com.example.darken.ExtraDimDetector
+import com.example.data.model.BatterySaverConfig
+import com.example.data.model.BatterySaverTrigger
 import com.example.data.model.DarkenConfig
 import com.example.data.model.DarkenTriggerMode
 import com.example.data.model.OriginalMedia
 import com.example.data.model.PageItem
 import com.example.data.repository.WallpaperRepository
 import com.example.render.DarkenTransitionController
+import com.example.service.WallpaperStatusBarColorPolicy
 import com.example.ui.WallpaperViewModel
 import com.example.ui.screens.EffectsScreen
 import com.example.ui.screens.MediaEditorScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.util.ImageProcessingUtils
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +51,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.abs
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -189,18 +200,119 @@ class DarkenControlsTest {
     }
 
     @Test
-    fun repositoryGeneratesCachesAndInvalidatesDarkenedBitmapsPerPageDimFactor() {
+    fun perceptualNormalizationEqualizesVaryingAndUnevenWallpapersAndSkipsDark() {
+        val brightBmp = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888).apply {
+            Canvas(this).drawColor(Color.rgb(235, 235, 235))
+        }
+        val midBmp = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888).apply {
+            Canvas(this).drawColor(Color.rgb(135, 140, 145))
+        }
+        val unevenBmp = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888).apply {
+            val c = Canvas(this)
+            c.drawColor(Color.rgb(45, 50, 55))
+            c.drawRect(0f, 0f, 80f, 40f, Paint().apply { color = Color.rgb(245, 240, 235) })
+        }
+        val darkBmp = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888).apply {
+            Canvas(this).drawColor(Color.rgb(20, 22, 24))
+        }
+
+        val target = 0.24f
+        val normBright = ImageProcessingUtils.createNormalizedDarkenedCopy(brightBmp, target, true)
+        val normMid = ImageProcessingUtils.createNormalizedDarkenedCopy(midBmp, target, true)
+        val normUneven = ImageProcessingUtils.createNormalizedDarkenedCopy(unevenBmp, target, true)
+        val normDark = ImageProcessingUtils.createNormalizedDarkenedCopy(darkBmp, target, true)
+
+        val brightAnalysis = ImageProcessingUtils.analyzePerceptualBrightness(normBright)
+        val midAnalysis = ImageProcessingUtils.analyzePerceptualBrightness(normMid)
+        val unevenAnalysis = ImageProcessingUtils.analyzePerceptualBrightness(normUneven)
+
+        assertTrue(
+            "Expected normalized bright (${brightAnalysis.effectiveBrightness}) and mid (${midAnalysis.effectiveBrightness}) to converge",
+            abs(brightAnalysis.effectiveBrightness - midAnalysis.effectiveBrightness) < 0.08f
+        )
+        assertTrue(
+            "Expected normalized bright (${brightAnalysis.effectiveBrightness}) near target $target",
+            brightAnalysis.effectiveBrightness in 0.16f..0.34f
+        )
+        assertTrue(
+            "Expected uneven highlight compressed below 0.55, got ${unevenAnalysis.p95Brightness}",
+            unevenAnalysis.p95Brightness < 0.55f
+        )
+        assertEquals(Color.rgb(20, 22, 24), normDark.getPixel(40, 40))
+
+        brightBmp.recycle()
+        midBmp.recycle()
+        unevenBmp.recycle()
+        darkBmp.recycle()
+        normBright.recycle()
+        normMid.recycle()
+        normUneven.recycle()
+        normDark.recycle()
+    }
+
+    @Test
+    fun wallpaperColorsPolicyNeverMarksAlreadyDarkOrDarkenedPagesAsLightText() {
+        val whiteBmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply {
+            Canvas(this).drawColor(Color.WHITE)
+        }
+
+        // Regression test: an Already dark page must NEVER receive HINT_SUPPORTS_DARK_TEXT (black icons)
+        val alreadyDarkColors = WallpaperStatusBarColorPolicy.computeWallpaperColors(
+            activePage = PageItem(pageIndex = 0, isAlreadyDark = true),
+            darkenActive = true,
+            shouldDarkenActivePage = false,
+            targetBrightness = 0.22f,
+            bitmapProvider = { whiteBmp }
+        )
+        assertEquals(0, alreadyDarkColors.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            assertTrue((alreadyDarkColors.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_THEME) != 0)
+        }
+
+        // Even when darken is active on a non-dark page, dark-surface status bar hints stay white icons
+        val darkenedColors = WallpaperStatusBarColorPolicy.computeWallpaperColors(
+            activePage = PageItem(pageIndex = 1, isAlreadyDark = false),
+            darkenActive = true,
+            shouldDarkenActivePage = true,
+            targetBrightness = 0.22f,
+            bitmapProvider = { whiteBmp }
+        )
+        assertEquals(0, darkenedColors.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT)
+
+        // Bright page when not darkened and not flagged Already dark preserves light-wallpaper dark-text hint
+        val brightColors = WallpaperStatusBarColorPolicy.computeWallpaperColors(
+            activePage = PageItem(pageIndex = 2, isAlreadyDark = false),
+            darkenActive = false,
+            shouldDarkenActivePage = false,
+            targetBrightness = 0.22f,
+            bitmapProvider = { whiteBmp }
+        )
+        assertTrue((brightColors.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT) != 0)
+
+        whiteBmp.recycle()
+    }
+
+    @Test
+    fun repositoryNormalizesCachesAndInvalidatesDarkenedBitmapsByTargetBrightness() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = WallpaperRepository.getInstance(context)
 
         val croppedDir = File(context.filesDir, "cropped").apply { mkdirs() }
         val brightSource = Bitmap.createBitmap(100, 200, Bitmap.Config.ARGB_8888).apply {
-            Canvas(this).drawColor(Color.rgb(200, 200, 200))
+            Canvas(this).drawColor(Color.rgb(220, 220, 220))
         }
         FileOutputStream(File(croppedDir, "test_bright_page.jpg")).use { out ->
             brightSource.compress(Bitmap.CompressFormat.JPEG, 98, out)
         }
         brightSource.recycle()
+
+        val mediumSource = Bitmap.createBitmap(100, 200, Bitmap.Config.ARGB_8888).apply {
+            Canvas(this).drawColor(Color.rgb(135, 135, 135))
+        }
+        FileOutputStream(File(croppedDir, "test_medium_page.jpg")).use { out ->
+            mediumSource.compress(Bitmap.CompressFormat.JPEG, 98, out)
+        }
+        mediumSource.recycle()
 
         repository.updateState { state ->
             state.copy(
@@ -209,45 +321,45 @@ class DarkenControlsTest {
                         pageIndex = 0,
                         croppedFileName = "test_bright_page.jpg",
                         isAlreadyDark = false,
-                        isBlank = false,
-                        dimFactor = 0.50f
+                        isBlank = false
                     ),
                     PageItem(
                         pageIndex = 1,
                         croppedFileName = "test_bright_page.jpg",
                         isAlreadyDark = true,
-                        isBlank = false,
-                        dimFactor = 0.50f
+                        isBlank = false
                     ),
                     PageItem(
                         pageIndex = 2,
-                        croppedFileName = "test_bright_page.jpg",
+                        croppedFileName = "test_medium_page.jpg",
                         isAlreadyDark = false,
-                        isBlank = false,
-                        dimFactor = 0.25f
+                        isBlank = false
                     )
                 ),
                 darken = DarkenConfig(
                     enabled = true,
                     triggerMode = DarkenTriggerMode.DARK_MODE_ONLY,
-                    autoDetectDark = true
+                    autoDetectDark = true,
+                    targetBrightness = 0.26f
                 )
             )
         }
 
         val normalBmp = repository.getCroppedBitmap(0, 100, 200, darkened = false)
         assertNotNull(normalBmp)
-        val darkenedBmp = repository.getCroppedBitmap(0, 100, 200, darkened = true)
-        assertNotNull(darkenedBmp)
-        val page2DarkenedBmp = repository.getCroppedBitmap(2, 100, 200, darkened = true)
-        assertNotNull(page2DarkenedBmp)
+        val darkenedBright = repository.getCroppedBitmap(0, 100, 200, darkened = true)
+        assertNotNull(darkenedBright)
+        val darkenedMedium = repository.getCroppedBitmap(2, 100, 200, darkened = true)
+        assertNotNull(darkenedMedium)
 
         val normalRed = Color.red(normalBmp!!.getPixel(50, 100))
-        val darkRed = Color.red(darkenedBmp!!.getPixel(50, 100))
-        val page2DarkRed = Color.red(page2DarkenedBmp!!.getPixel(50, 100))
-        assertTrue("Expected normal ($normalRed) brighter than darkened ($darkRed)", darkRed < normalRed - 50)
-        assertTrue("Expected ~50% darkened pixel near 100, got $darkRed", darkRed in 80..120)
-        assertTrue("Expected page 2 (25% dim: $page2DarkRed) brighter than page 0 (50% dim: $darkRed)", page2DarkRed > darkRed + 25)
+        val darkBrightRed = Color.red(darkenedBright!!.getPixel(50, 100))
+        val darkMediumRed = Color.red(darkenedMedium!!.getPixel(50, 100))
+        assertTrue("Expected normal ($normalRed) brighter than darkened ($darkBrightRed)", darkBrightRed < normalRed - 80)
+        assertTrue(
+            "Expected bright ($darkBrightRed) and medium ($darkMediumRed) normalized close together",
+            abs(darkBrightRed - darkMediumRed) <= 30
+        )
 
         val diskCacheFile = repository.getDarkenedCacheFileForTesting(0, 100, 200)
         assertNotNull(diskCacheFile)
@@ -256,22 +368,18 @@ class DarkenControlsTest {
         // Page 1 flagged as already dark should NOT be darkened when autoDetectDark is enabled
         val alreadyDarkResult = repository.getCroppedBitmap(1, 100, 200, darkened = true)
         assertNotNull(alreadyDarkResult)
-        assertTrue(Color.red(alreadyDarkResult!!.getPixel(50, 100)) > 170)
+        assertTrue(Color.red(alreadyDarkResult!!.getPixel(50, 100)) > 180)
 
-        // Updating page 0 dimFactor should invalidate darkened cache and regenerate a darker cached file while pruning the old one
+        // Updating global targetBrightness should invalidate darkened cache and regenerate a darker cached file while pruning old one
         val prevGeneration = repository.darkenedBitmapGeneration
         repository.updateState { state ->
-            state.copy(
-                pages = state.pages.map { page ->
-                    if (page.pageIndex == 0) page.copy(dimFactor = 0.75f) else page
-                }
-            )
+            state.copy(darken = state.darken.copy(targetBrightness = 0.12f))
         }
         assertTrue(repository.darkenedBitmapGeneration > prevGeneration)
 
         val darkerBmp = repository.getCroppedBitmap(0, 100, 200, darkened = true)!!
         val darkerRed = Color.red(darkerBmp.getPixel(50, 100))
-        assertTrue("Expected 75% dim ($darkerRed) darker than 50% dim ($darkRed)", darkerRed < darkRed - 25)
+        assertTrue("Expected lower targetBrightness ($darkerRed) darker than 0.26f ($darkBrightRed)", darkerRed < darkBrightRed - 15)
         val newDiskCacheFile = repository.getDarkenedCacheFileForTesting(0, 100, 200)!!
         assertTrue(newDiskCacheFile.exists())
         assertFalse("Expected old cache file to be pruned", diskCacheFile.exists())
@@ -331,13 +439,53 @@ class DarkenControlsTest {
     }
 
     @Test
-    fun effectsScreenProvidesTriggerChoicesBatterySaverConsolidationAndPopupCancelConfirm() {
+    fun effectsScreenProvidesStandaloneBatterySaverCardWithoutDarkenCard() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = WallpaperViewModel(app)
+        viewModel.setAppLanguage("en")
+        viewModel.updateBatterySaverConfig(BatterySaverConfig(enabled = false))
+
+        composeRule.setContent {
+            MyApplicationTheme {
+                EffectsScreen(viewModel = viewModel)
+            }
+        }
+        composeRule.waitForIdle()
+
+        // Darken settings moved out to the top-left Conditional Menu
+        composeRule.onNodeWithTag("darken_settings_card").assertDoesNotExist()
+        composeRule.onNodeWithTag("dim_factor_slider").assertDoesNotExist()
+
+        // Standalone Battery Saver card opens popup editor, supports Cancel & Confirm
+        composeRule.onNodeWithTag("battery_saver_settings_card_edit_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("battery_saver_editor_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("toggle_battery_saver").performScrollTo().performClick()
+        composeRule.onNodeWithTag("editor_cancel_button").performClick()
+        composeRule.waitForIdle()
+        assertFalse(viewModel.appState.value.batterySaver.enabled)
+
+        composeRule.onNodeWithTag("battery_saver_settings_card_edit_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("toggle_battery_saver").performScrollTo().performClick()
+        composeRule.onNodeWithTag("battery_saver_trigger_EITHER").performScrollTo().performClick()
+        composeRule.onNodeWithTag("editor_confirm_button").performClick()
+        composeRule.waitForIdle()
+
+        assertTrue(viewModel.appState.value.batterySaver.enabled)
+        assertEquals(BatterySaverTrigger.EITHER, viewModel.appState.value.batterySaver.triggerMode)
+    }
+
+    @Test
+    fun topBarConditionalMenusManageDarkenMultiPagePreviewAndSettingsDiagnostics() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = WallpaperViewModel(app)
+        viewModel.setAppLanguage("en")
         viewModel.updateDarkenConfig(
             DarkenConfig(
                 enabled = false,
                 triggerMode = DarkenTriggerMode.DARK_MODE_ONLY,
+                targetBrightness = 0.24f,
                 scheduleStartHour = 20,
                 scheduleStartMinute = 0,
                 scheduleEndHour = 7,
@@ -347,47 +495,45 @@ class DarkenControlsTest {
 
         composeRule.setContent {
             MyApplicationTheme {
-                EffectsScreen(viewModel = viewModel)
+                MainAppScaffold(viewModel = viewModel)
             }
         }
+        composeRule.waitForIdle()
 
-        // Verify no cache-related copy or global dim slider is exposed on dashboard
-        assertEquals(0, composeRule.onAllNodesWithText("cache", substring = true, ignoreCase = true).fetchSemanticsNodes().size)
-        assertEquals(0, composeRule.onAllNodesWithText("Pre-generate", substring = true, ignoreCase = true).fetchSemanticsNodes().size)
-        composeRule.onNodeWithTag("dim_factor_slider").assertDoesNotExist()
-        // Toggles are not exposed inline while scrolling
-        composeRule.onNodeWithTag("toggle_darken_enabled").assertDoesNotExist()
+        // Studio tab: Darken Conditional Menu visible, Diagnostics Conditional Menu hidden
+        composeRule.onNodeWithTag("conditional_menu_darken").assertIsDisplayed()
+        composeRule.onNodeWithTag("conditional_menu_diagnostics").assertDoesNotExist()
 
-        // Open consolidated Darken & Battery conditions editor popup, toggle on, then Cancel -> state stays disabled
-        composeRule.onNodeWithTag("darken_settings_card_edit_button").performScrollTo().performClick()
+        // Open Darken Conditional Menu -> verify multi-page preview + single brightness slider, Cancel preserves state
+        composeRule.onNodeWithTag("conditional_menu_darken").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("darken_conditions_editor_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("darken_multi_page_preview").assertIsDisplayed()
+        composeRule.onNodeWithTag("darken_preview_compare_toggle").assertIsDisplayed()
+        composeRule.onNodeWithTag("target_brightness_slider").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("toggle_darken_enabled").performScrollTo().performClick()
         composeRule.onNodeWithTag("editor_cancel_button").performClick()
         composeRule.waitForIdle()
         assertFalse(viewModel.appState.value.darken.enabled)
 
-        // Re-open editor popup, enable darken, verify consolidated controls & 4 trigger choices
-        composeRule.onNodeWithTag("darken_settings_card_edit_button").performScrollTo().performClick()
+        // Re-open Darken Conditional Menu, edit target brightness, page 0 dark badge, trigger mode, schedule, and Confirm
+        composeRule.onNodeWithTag("conditional_menu_darken").performClick()
         composeRule.waitForIdle()
+        val initialPage0Dark = viewModel.appState.value.pages.first { it.pageIndex == 0 }.isAlreadyDark
+        composeRule.onNodeWithTag("darken_preview_page_0").performClick()
+        composeRule.onNodeWithTag("target_brightness_slider")
+            .performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { action ->
+                action(0.16f)
+            }
         composeRule.onNodeWithTag("toggle_darken_enabled").performScrollTo().performClick()
-
-        // Choice 1: Battery Saver Only & consolidated Battery Saver section
         composeRule.onNodeWithTag("darken_mode_battery_saver_only").performScrollTo().performClick()
-        composeRule.onNodeWithTag("toggle_battery_saver").performScrollTo().assertIsDisplayed()
-
-        // Choice 2: Scheduled Time Only
         composeRule.onNodeWithTag("darken_mode_schedule_only").performScrollTo().performClick()
         composeRule.onNodeWithTag("darken_schedule_start_button").performScrollTo().assertIsDisplayed()
-
-        // Choice 3: System Dark Mode Only
         composeRule.onNodeWithTag("darken_mode_dark_mode_only").performScrollTo().performClick()
         composeRule.onNodeWithTag("toggle_darken_on_battery_saver").performScrollTo().performClick()
-
-        // Choice 4: Both (Either Triggers)
         composeRule.onNodeWithTag("darken_mode_both_or").performScrollTo().performClick()
 
-        // Open Start time dialog, switch to keyboard input, enter 21:45, and confirm
         composeRule.onNodeWithTag("darken_schedule_start_button").performScrollTo().performClick()
         composeRule.onNodeWithTag("darken_time_picker_mode_toggle").performClick()
         composeRule.onNodeWithContentDescription("for hour").performTextReplacement("21")
@@ -395,7 +541,6 @@ class DarkenControlsTest {
         composeRule.onNodeWithTag("darken_time_picker_confirm").performClick()
         composeRule.waitForIdle()
 
-        // Confirm editor popup
         composeRule.onNodeWithTag("editor_confirm_button").performClick()
         composeRule.waitForIdle()
 
@@ -405,12 +550,35 @@ class DarkenControlsTest {
         assertTrue(updated.darkenOnBatterySaver)
         assertEquals(21, updated.scheduleStartHour)
         assertEquals(45, updated.scheduleStartMinute)
-        composeRule.onNodeWithTag("darken_settings_card").performScrollTo()
-        composeRule.onNodeWithText("21:45 – 07:00").assertIsDisplayed()
+        assertEquals(0.16f, updated.targetBrightness, 0.02f)
+        assertEquals(!initialPage0Dark, viewModel.appState.value.pages.first { it.pageIndex == 0 }.isAlreadyDark)
+
+        // Switch to Behavior & Media tabs -> neither contextual menu button is shown
+        composeRule.onNodeWithTag("tab_behavior").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("conditional_menu_darken").assertDoesNotExist()
+        composeRule.onNodeWithTag("conditional_menu_diagnostics").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("tab_media").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("conditional_menu_darken").assertDoesNotExist()
+        composeRule.onNodeWithTag("conditional_menu_diagnostics").assertDoesNotExist()
+
+        // Switch to Settings tab -> Darken menu hidden, Diagnostics Conditional Menu appears in top bar and opens Diagnostics popup
+        composeRule.onNodeWithTag("tab_settings").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("conditional_menu_darken").assertDoesNotExist()
+        composeRule.onNodeWithTag("conditional_menu_diagnostics").assertIsDisplayed()
+        composeRule.onNodeWithTag("conditional_menu_diagnostics").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("diagnostics_conditional_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("diagnostics_dialog_close_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("diagnostics_conditional_dialog").assertDoesNotExist()
     }
 
     @Test
-    fun pageSettingsAllowsDarkenIntensityControlAndLivePreview() {
+    fun mergedPreviewTogglesBetweenSingleAndFullAndPersistsSplitDivider() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val originalsDir = File(context.filesDir, "originals").apply { mkdirs() }
         val fileName = "test_page_settings_media.jpg"
@@ -434,10 +602,10 @@ class DarkenControlsTest {
         val initialPage = PageItem(
             pageIndex = 0,
             originalId = media.id,
-            isAlreadyDark = false,
-            dimFactor = 0.40f
+            isAlreadyDark = false
         )
         var savedPage: PageItem? = null
+        val reportedSplits = mutableListOf<Float>()
 
         composeRule.setContent {
             MyApplicationTheme {
@@ -446,6 +614,8 @@ class DarkenControlsTest {
                     page = initialPage,
                     pageCount = 3,
                     isSaving = false,
+                    initialSplitFraction = 0.40f,
+                    onSplitFractionChange = { reportedSplits.add(it) },
                     onDismiss = {},
                     onSave = { savedPage = it }
                 )
@@ -454,33 +624,45 @@ class DarkenControlsTest {
 
         composeRule.waitForIdle()
 
-        // Toggle darkened preview on and verify preview badge appears
-        composeRule.onNodeWithTag("toggle_preview_darkened").performScrollTo().performClick()
-        composeRule.onNodeWithTag("crop_darken_preview_badge", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Darkened preview · 40%", useUnmergedTree = true).assertIsDisplayed()
+        // Per-page darken preview & dim intensity slider were removed
+        composeRule.onNodeWithTag("toggle_preview_darkened").assertDoesNotExist()
+        composeRule.onNodeWithTag("page_dim_factor_slider").assertDoesNotExist()
 
-        // Adjust page darken intensity slider to 70%
-        composeRule.onNodeWithTag("page_dim_factor_slider")
-            .performScrollTo()
-            .performSemanticsAction(SemanticsActions.SetProgress) { action ->
-                action(0.70f)
-            }
+        // Merged preview starts in Full & Parallax Bounds mode; clicking toggles to Single Page mode
+        composeRule.onNodeWithTag("crop_merged_preview").assertIsDisplayed()
+        composeRule.onNodeWithTag("crop_parallax_bounds_preview", useUnmergedTree = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("crop_merged_preview").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("crop_darken_preview_badge", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Darkened preview · 70%", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("crop_parallax_bounds_preview", useUnmergedTree = true).assertDoesNotExist()
 
-        // Toggle Already dark on -> preview badge & intensity controls hide
-        composeRule.onNodeWithTag("toggle_is_already_dark").performScrollTo().performClick()
+        // Clicking mode pill switches back to Full & Parallax Bounds mode
+        composeRule.onNodeWithTag("crop_preview_mode_pill").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("crop_darken_preview_badge", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("crop_parallax_bounds_preview", useUnmergedTree = true).assertIsDisplayed()
 
-        // Toggle Already dark back off and save
+        // Drag split divider and verify persistence callback receives updated fraction
+        composeRule.onNodeWithTag("crop_split_divider").assertIsDisplayed()
+        composeRule.onNodeWithTag("crop_split_divider").performTouchInput {
+            swipeDown(startY = centerY, endY = centerY + 120f)
+        }
+        composeRule.waitForIdle()
+        assertTrue("Expected split fraction callback after dragging divider", reportedSplits.isNotEmpty())
+        assertTrue("Expected increased split fraction > 0.40f, got ${reportedSplits.last()}", reportedSplits.last() > 0.40f)
+
+        // Drag split divider upward as well
+        composeRule.onNodeWithTag("crop_split_divider").performTouchInput {
+            swipeUp(startY = centerY, endY = centerY - 180f)
+        }
+        composeRule.waitForIdle()
+        assertTrue("Expected decreased split fraction after upward swipe", reportedSplits.last() < 0.42f)
+
+        // Toggle Already dark and save
         composeRule.onNodeWithTag("toggle_is_already_dark").performScrollTo().performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("crop_confirm_button").performClick()
 
         assertNotNull(savedPage)
-        assertFalse(savedPage!!.isAlreadyDark)
-        assertEquals(0.70f, savedPage!!.dimFactor, 0.02f)
+        assertTrue(savedPage!!.isAlreadyDark)
     }
 }

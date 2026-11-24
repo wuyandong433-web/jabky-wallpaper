@@ -211,6 +211,156 @@ object ImageProcessingUtils {
     }
 
     /**
+     * Perceptual brightness breakdown across uniform + highlight quantiles so non-homogeneous
+     * images (e.g. dark scenes with bright skies or highlights) are measured accurately.
+     */
+    data class BrightnessAnalysis(
+        val meanBrightness: Float,
+        val p85Brightness: Float,
+        val p95Brightness: Float,
+        val effectiveBrightness: Float
+    )
+
+    private fun pixelPerceptualBrightnessByte(r: Int, g: Int, b: Int): Int {
+        val luma = (r * 54 + g * 183 + b * 19) ushr 8
+        val maxChannel = max(r, max(g, b))
+        return ((luma * 7 + maxChannel * 3) / 10).coerceIn(0, 255)
+    }
+
+    private fun samplePerceptualBrightnessBytes(srcBmp: Bitmap): FloatArray {
+        val w = srcBmp.width.coerceAtLeast(1)
+        val h = srcBmp.height.coerceAtLeast(1)
+        val gridCols = min(48, w).coerceAtLeast(1)
+        val gridRows = min(48, h).coerceAtLeast(1)
+        val samples = FloatArray(gridCols * gridRows)
+        val rowPixels = IntArray(w)
+        var outIndex = 0
+        for (gy in 0 until gridRows) {
+            val py = ((gy + 0.5f) * h / gridRows).toInt().coerceIn(0, h - 1)
+            srcBmp.getPixels(rowPixels, 0, w, 0, py, w, 1)
+            for (gx in 0 until gridCols) {
+                val px = ((gx + 0.5f) * w / gridCols).toInt().coerceIn(0, w - 1)
+                val c = rowPixels[px]
+                val r = (c ushr 16) and 0xFF
+                val g = (c ushr 8) and 0xFF
+                val b = c and 0xFF
+                samples[outIndex++] = pixelPerceptualBrightnessByte(r, g, b) / 255f
+            }
+        }
+        return samples
+    }
+
+    private fun evaluateEffectiveBrightness(sortedOrRawSamples: FloatArray, sorted: Boolean = false): BrightnessAnalysis {
+        if (sortedOrRawSamples.isEmpty()) {
+            return BrightnessAnalysis(0f, 0f, 0f, 0f)
+        }
+        val values = if (sorted) sortedOrRawSamples else sortedOrRawSamples.copyOf().also { it.sort() }
+        var sum = 0.0
+        for (v in values) sum += v
+        val mean = (sum / values.size).toFloat()
+        val p85 = values[((values.size - 1) * 0.85f).roundToInt().coerceIn(0, values.lastIndex)]
+        val p95 = values[((values.size - 1) * 0.95f).roundToInt().coerceIn(0, values.lastIndex)]
+        val effective = (0.55f * mean + 0.30f * p85 + 0.15f * p95).coerceIn(0f, 1f)
+        return BrightnessAnalysis(mean, p85, p95, effective)
+    }
+
+    /**
+     * Analyzes perceptual brightness using a dense sample grid + upper percentiles so
+     * non-homogeneous bright regions are properly accounted for.
+     */
+    fun analyzePerceptualBrightness(srcBmp: Bitmap): BrightnessAnalysis {
+        if (srcBmp.width <= 0 || srcBmp.height <= 0) {
+            return BrightnessAnalysis(0f, 0f, 0f, 0f)
+        }
+        return evaluateEffectiveBrightness(samplePerceptualBrightnessBytes(srcBmp))
+    }
+
+    private fun applySoftKneeToneCurve(
+        brightness: Float,
+        gain: Float,
+        kneeThreshold: Float
+    ): Float {
+        if (brightness <= 0f) return 0f
+        val scaled = brightness * gain
+        if (scaled <= kneeThreshold) return scaled.coerceIn(0f, 1f)
+        val excess = scaled - kneeThreshold
+        val compressed = kneeThreshold + excess / (1f + excess * 2.8f)
+        return compressed.coerceIn(0f, 1f)
+    }
+
+    /**
+     * Audio-loudness-normalization style adaptive darkening:
+     * Analyzes the image's perceptual brightness (mean + highlight quantiles), solves a
+     * smooth tone-mapped gain curve with soft-knee highlight compression so any bright or
+     * uneven wallpaper normalizes to [targetBrightness]. When [skipIfAlreadyBelowTarget] is
+     * true and the wallpaper is already at or below [targetBrightness], returns an un-darkened copy.
+     */
+    fun createNormalizedDarkenedCopy(
+        srcBmp: Bitmap,
+        targetBrightness: Float,
+        skipIfAlreadyBelowTarget: Boolean = true
+    ): Bitmap {
+        val w = srcBmp.width.coerceAtLeast(1)
+        val h = srcBmp.height.coerceAtLeast(1)
+        val target = targetBrightness.coerceIn(0.03f, 0.90f)
+        val samples = samplePerceptualBrightnessBytes(srcBmp)
+        samples.sort()
+        val analysis = evaluateEffectiveBrightness(samples, sorted = true)
+
+        if (skipIfAlreadyBelowTarget && analysis.effectiveBrightness <= target + 0.01f) {
+            return srcBmp.copy(Bitmap.Config.ARGB_8888, false)
+        }
+
+        val kneeThreshold = (target * 1.12f).coerceIn(0.05f, 0.75f)
+        var lo = 0.02f
+        var hi = 1.0f
+        val mapped = FloatArray(samples.size)
+        repeat(12) {
+            val mid = (lo + hi) * 0.5f
+            for (i in samples.indices) {
+                mapped[i] = applySoftKneeToneCurve(samples[i], mid, kneeThreshold)
+            }
+            val candidateEffective = evaluateEffectiveBrightness(mapped, sorted = true).effectiveBrightness
+            if (candidateEffective > target) {
+                hi = mid
+            } else {
+                lo = mid
+            }
+        }
+        val solvedGain = ((lo + hi) * 0.5f).coerceIn(0.02f, 1.0f)
+
+        // Precompute 256-entry integer scaling LUT (Q8 fixed-point: 256 == 1.0x)
+        val scaleLut = IntArray(256)
+        scaleLut[0] = (solvedGain * 256f).roundToInt().coerceIn(0, 256)
+        for (i in 1..255) {
+            val bNorm = i / 255f
+            val targetNorm = applySoftKneeToneCurve(bNorm, solvedGain, kneeThreshold)
+            val ratio = (targetNorm / bNorm).coerceIn(0f, 1.0f)
+            scaleLut[i] = (ratio * 256f).roundToInt().coerceIn(0, 256)
+        }
+
+        val pixels = IntArray(w * h)
+        srcBmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        for (idx in pixels.indices) {
+            val c = pixels[idx]
+            val a = c and -0x1000000
+            val r = (c ushr 16) and 0xFF
+            val g = (c ushr 8) and 0xFF
+            val b = c and 0xFF
+            val bIdx = pixelPerceptualBrightnessByte(r, g, b)
+            val s = scaleLut[bIdx]
+            val nr = ((r * s + 128) ushr 8).coerceIn(0, 255)
+            val ng = ((g * s + 128) ushr 8).coerceIn(0, 255)
+            val nb = ((b * s + 128) ushr 8).coerceIn(0, 255)
+            pixels[idx] = a or (nr shl 16) or (ng shl 8) or nb
+        }
+
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, w, 0, 0, w, h)
+        }
+    }
+
+    /**
      * Creates a pre-darkened copy of [srcBmp] by scaling RGB intensity by (1 - [dimFactor]).
      */
     fun createDarkenedCopy(

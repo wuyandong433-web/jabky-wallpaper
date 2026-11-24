@@ -459,48 +459,23 @@ fun StudioScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+            val defaultNewPresetName = stringResource(
+                R.string.studio_preset_default_name,
+                appState.presets.size + 1
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        stringResource(R.string.studio_presets_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    val defaultNewPresetName = stringResource(
-                        R.string.studio_preset_default_name,
-                        appState.presets.size + 1
-                    )
-                    FilledTonalButton(
-                        onClick = {
-                            presetActionId = null
-                            presetName = defaultNewPresetName.take(40)
-                            presetAction = PresetAction.CREATE
-                        },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("create_preset_button")
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            stringResource(R.string.studio_new_preset),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     appState.presets.forEach { preset ->
                         var menuExpanded by remember(preset.id) { mutableStateOf(false) }
@@ -582,6 +557,26 @@ fun StudioScreen(
                             }
                         }
                     }
+                }
+                FilledTonalButton(
+                    onClick = {
+                        presetActionId = null
+                        presetName = defaultNewPresetName.take(40)
+                        presetAction = PresetAction.CREATE
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("create_preset_button")
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        stringResource(R.string.studio_new_preset),
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
             }
         }

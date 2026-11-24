@@ -1,18 +1,13 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,29 +15,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.BlurOn
-import androidx.compose.material.icons.filled.Brightness4
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimeInput
-import androidx.compose.material3.TimePicker
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -52,17 +32,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
-import com.example.darken.ExtraDimDetector
 import com.example.data.model.BatterySaverConfig
 import com.example.data.model.BatterySaverTrigger
-import com.example.data.model.DarkenConfig
-import com.example.data.model.DarkenTriggerMode
 import com.example.data.model.OffsetEasingStyle
 import com.example.data.model.WallpaperAppState
 import com.example.power.BatterySaverPolicy
@@ -78,28 +54,15 @@ import com.example.ui.components.EditorSliderControl
 import com.example.ui.components.EditorSwitchRow
 import com.example.ui.components.SettingDashboardCard
 import com.example.ui.components.SettingEditorDialog
-import com.example.ui.darkenTriggerLabelRes
 import com.example.ui.offsetEasingStyleLabelRes
-import kotlinx.coroutines.delay
-import java.util.Locale
 import kotlin.math.roundToInt
-
-private enum class ScheduleTimeField {
-    START,
-    END
-}
 
 @Composable
 fun EffectsScreen(
     viewModel: WallpaperViewModel
 ) {
     val appState by viewModel.appState.collectAsState()
-    val isSystemDarkMode by viewModel.isSystemDarkMode.collectAsState()
     val powerSnapshot by viewModel.powerSnapshot.collectAsState()
-    val isInSystemDarkTheme = isSystemInDarkTheme()
-    LaunchedEffect(isInSystemDarkTheme) {
-        viewModel.refreshSystemDarkMode(isInSystemDarkTheme)
-    }
 
     Column(
         modifier = Modifier
@@ -149,16 +112,11 @@ fun EffectsScreen(
             }
         )
 
-        DarkenConditionsDashboardCard(
-            darken = appState.darken,
+        BatterySaverDashboardCard(
             batterySaver = appState.batterySaver,
             normalFrameRate = appState.animationFrameRate,
-            isSystemDarkMode = isSystemDarkMode,
             powerSnapshot = powerSnapshot,
-            onCommit = { nextDarken, nextBattery ->
-                viewModel.updateDarkenConfig(nextDarken)
-                viewModel.updateBatterySaverConfig(nextBattery)
-            }
+            onCommit = viewModel::updateBatterySaverConfig
         )
     }
 }
@@ -634,57 +592,13 @@ private fun DisplayEntryAnimationDashboardCard(
 }
 
 @Composable
-private fun DarkenConditionsDashboardCard(
-    darken: DarkenConfig,
+private fun BatterySaverDashboardCard(
     batterySaver: BatterySaverConfig,
     normalFrameRate: Int,
-    isSystemDarkMode: Boolean,
     powerSnapshot: PowerSnapshot,
-    onCommit: (DarkenConfig, BatterySaverConfig) -> Unit
+    onCommit: (BatterySaverConfig) -> Unit
 ) {
-    var scheduleTimeTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(darken.useSchedule) {
-        if (!darken.useSchedule) return@LaunchedEffect
-        while (true) {
-            delay(15_000L)
-            scheduleTimeTick++
-        }
-    }
-
     val isSaverActive = BatterySaverPolicy.isBatterySaverActive(batterySaver, powerSnapshot)
-    val isScheduleActiveNow = remember(darken, scheduleTimeTick) {
-        darken.useSchedule && ExtraDimDetector.isScheduledActive(darken)
-    }
-    val modeDarkenActive = darken.enabled && when (darken.triggerMode) {
-        DarkenTriggerMode.SCHEDULE_ONLY -> isScheduleActiveNow
-        DarkenTriggerMode.DARK_MODE_ONLY -> isSystemDarkMode
-        DarkenTriggerMode.BOTH_OR -> isSystemDarkMode || isScheduleActiveNow
-        DarkenTriggerMode.BATTERY_SAVER_ONLY -> isSaverActive
-    }
-    val isDarkenActiveNow = modeDarkenActive ||
-        (darken.enabled && darken.darkenOnBatterySaver && isSaverActive)
-
-    val darkenBadge = when {
-        isDarkenActiveNow -> DashboardBadge(
-            text = stringResource(R.string.darken_status_darkened),
-            tone = DashboardBadgeTone.SUCCESS,
-            showDot = true,
-            testTag = "darken_status_badge"
-        )
-        darken.enabled -> DashboardBadge(
-            text = stringResource(R.string.darken_status_standby),
-            tone = DashboardBadgeTone.PRIMARY,
-            showDot = true,
-            testTag = "darken_status_badge"
-        )
-        else -> DashboardBadge(
-            text = stringResource(R.string.darken_status_off),
-            tone = DashboardBadgeTone.NEUTRAL,
-            showDot = true,
-            testTag = "darken_status_badge"
-        )
-    }
-
     val effectiveFps = BatterySaverPolicy.effectiveFrameRate(normalFrameRate, batterySaver, powerSnapshot)
     val batteryLabel = powerSnapshot.batteryPercent?.let {
         stringResource(R.string.percent_value, it)
@@ -703,12 +617,6 @@ private fun DarkenConditionsDashboardCard(
             DashboardBadgeTone.PRIMARY
         else -> DashboardBadgeTone.NEUTRAL
     }
-
-    val scheduleWindowText = "${
-        formatScheduleTime(darken.scheduleStartHour, darken.scheduleStartMinute)
-    } – ${
-        formatScheduleTime(darken.scheduleEndHour, darken.scheduleEndMinute)
-    }"
 
     val batteryMetricValue = if (!batterySaver.enabled) {
         stringResource(R.string.state_off)
@@ -731,321 +639,55 @@ private fun DarkenConditionsDashboardCard(
         }
     }
 
-    val metrics = buildList {
-        add(
-            DashboardMetric(
-                label = stringResource(R.string.darken_summary_trigger),
-                value = if (darken.enabled) {
-                    stringResource(darkenTriggerLabelRes(darken.triggerMode))
-                } else {
-                    stringResource(R.string.state_off)
-                }
+    val title = stringResource(R.string.battery_saver_title)
+    var showEditor by remember { mutableStateOf(false) }
+
+    SettingDashboardCard(
+        title = title,
+        icon = Icons.Default.BatterySaver,
+        cardTestTag = "battery_saver_settings_card",
+        editContentDescription = stringResource(R.string.cd_edit_setting, title),
+        onEditClick = { showEditor = true },
+        badges = listOf(
+            DashboardBadge(
+                text = batteryBadgeText,
+                tone = batteryBadgeTone,
+                showDot = true,
+                testTag = "battery_saver_status_badge"
             )
-        )
-        if (darken.enabled && darken.triggerMode.usesSchedule) {
-            add(
-                DashboardMetric(
-                    label = stringResource(R.string.darken_schedule_window),
-                    value = scheduleWindowText
-                )
-            )
-        }
-        add(
+        ),
+        metrics = listOf(
             DashboardMetric(
                 label = stringResource(R.string.darken_summary_battery_saver),
                 value = batteryMetricValue
-            )
-        )
-        add(
+            ),
             DashboardMetric(
-                label = stringResource(R.string.darken_summary_smart_detect),
-                value = if (darken.autoDetectDark) {
+                label = stringResource(R.string.battery_pause_charging_title),
+                value = if (batterySaver.pauseWhileCharging) {
                     stringResource(R.string.state_on)
                 } else {
                     stringResource(R.string.state_off)
                 }
             )
         )
-        if (darken.enabled && darken.darkenOnBatterySaver && !darken.triggerMode.usesBatterySaver) {
-            add(
-                DashboardMetric(
-                    label = stringResource(R.string.darken_also_on_battery_title),
-                    value = stringResource(R.string.state_on)
-                )
-            )
-        }
-    }
-
-    val title = stringResource(R.string.darken_conditions_title)
-    var showEditor by remember { mutableStateOf(false) }
-
-    SettingDashboardCard(
-        title = title,
-        icon = Icons.Default.DarkMode,
-        cardTestTag = "darken_settings_card",
-        editContentDescription = stringResource(R.string.cd_edit_setting, title),
-        onEditClick = { showEditor = true },
-        badges = listOf(
-            darkenBadge,
-            DashboardBadge(
-                text = batteryBadgeText,
-                tone = batteryBadgeTone,
-                testTag = "battery_saver_status_badge"
-            )
-        ),
-        metrics = metrics
     )
 
     if (showEditor) {
-        var draftDarken by remember(darken) { mutableStateOf(darken) }
         var draftBattery by remember(batterySaver) { mutableStateOf(batterySaver) }
         var draftThresholdSlider by remember(batterySaver.thresholdPercent) {
             mutableFloatStateOf(batterySaver.thresholdPercent.toFloat())
         }
-        var editingTimeField by remember { mutableStateOf<ScheduleTimeField?>(null) }
 
         SettingEditorDialog(
             title = title,
-            icon = Icons.Default.DarkMode,
+            icon = Icons.Default.BatterySaver,
             onDismiss = { showEditor = false },
             onConfirm = {
-                onCommit(
-                    draftDarken,
-                    draftBattery.copy(thresholdPercent = draftThresholdSlider.roundToInt())
-                )
+                onCommit(draftBattery.copy(thresholdPercent = draftThresholdSlider.roundToInt()))
                 showEditor = false
             },
-            dialogTestTag = "darken_conditions_editor_dialog"
+            dialogTestTag = "battery_saver_editor_dialog"
         ) {
-            Text(
-                text = stringResource(R.string.darken_section_title),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            EditorSwitchRow(
-                title = stringResource(R.string.darken_auto_title),
-                description = stringResource(R.string.darken_auto_desc),
-                checked = draftDarken.enabled,
-                onCheckedChange = { draftDarken = draftDarken.copy(enabled = it) },
-                switchTestTag = "toggle_darken_enabled"
-            )
-
-            AnimatedVisibility(visible = draftDarken.enabled) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = stringResource(R.string.darken_trigger_label),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
-                    DarkenTriggerMode.values().forEach { mode ->
-                        val selected = draftDarken.triggerMode == mode
-                        val modeTag = when (mode) {
-                            DarkenTriggerMode.SCHEDULE_ONLY -> "darken_mode_schedule_only"
-                            DarkenTriggerMode.DARK_MODE_ONLY -> "darken_mode_dark_mode_only"
-                            DarkenTriggerMode.BOTH_OR -> "darken_mode_both_or"
-                            DarkenTriggerMode.BATTERY_SAVER_ONLY -> "darken_mode_battery_saver_only"
-                        }
-                        val modeIcon = when (mode) {
-                            DarkenTriggerMode.SCHEDULE_ONLY -> Icons.Default.Schedule
-                            DarkenTriggerMode.DARK_MODE_ONLY -> Icons.Default.Brightness4
-                            DarkenTriggerMode.BOTH_OR -> Icons.Default.AutoAwesome
-                            DarkenTriggerMode.BATTERY_SAVER_ONLY -> Icons.Default.BatterySaver
-                        }
-                        val startFmt = formatScheduleTime(
-                            draftDarken.scheduleStartHour,
-                            draftDarken.scheduleStartMinute
-                        )
-                        val endFmt = formatScheduleTime(
-                            draftDarken.scheduleEndHour,
-                            draftDarken.scheduleEndMinute
-                        )
-                        val modeSubtitle = when (mode) {
-                            DarkenTriggerMode.SCHEDULE_ONLY -> stringResource(
-                                R.string.darken_mode_schedule_daily,
-                                startFmt,
-                                endFmt
-                            )
-                            DarkenTriggerMode.DARK_MODE_ONLY -> if (isSystemDarkMode) {
-                                stringResource(R.string.darken_mode_dark_mode_active)
-                            } else {
-                                stringResource(R.string.darken_mode_dark_mode_only_desc)
-                            }
-                            DarkenTriggerMode.BOTH_OR -> stringResource(
-                                R.string.darken_mode_both_or_desc,
-                                startFmt,
-                                endFmt
-                            )
-                            DarkenTriggerMode.BATTERY_SAVER_ONLY ->
-                                stringResource(R.string.darken_mode_battery_only_desc)
-                        }
-
-                        EditorRadioOptionRow(
-                            title = stringResource(darkenTriggerLabelRes(mode)),
-                            description = modeSubtitle,
-                            icon = modeIcon,
-                            selected = selected,
-                            onClick = { draftDarken = draftDarken.copy(triggerMode = mode) },
-                            rowTestTag = modeTag
-                        )
-                    }
-
-                    AnimatedVisibility(visible = draftDarken.triggerMode.usesSchedule) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Schedule,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = stringResource(R.string.darken_schedule_window),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                OutlinedCard(
-                                    onClick = { editingTimeField = ScheduleTimeField.START },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 56.dp)
-                                        .testTag("darken_schedule_start_button"),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
-                                        Text(
-                                            text = stringResource(R.string.darken_start_time),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Text(
-                                            text = formatScheduleTime(
-                                                draftDarken.scheduleStartHour,
-                                                draftDarken.scheduleStartMinute
-                                            ),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-
-                                OutlinedCard(
-                                    onClick = { editingTimeField = ScheduleTimeField.END },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 56.dp)
-                                        .testTag("darken_schedule_end_button"),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
-                                        Text(
-                                            text = stringResource(R.string.darken_end_time),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Text(
-                                            text = formatScheduleTime(
-                                                draftDarken.scheduleEndHour,
-                                                draftDarken.scheduleEndMinute
-                                            ),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-
-                            val sameStartAndEnd =
-                                draftDarken.scheduleStartHour == draftDarken.scheduleEndHour &&
-                                    draftDarken.scheduleStartMinute == draftDarken.scheduleEndMinute
-                            if (sameStartAndEnd) {
-                                Text(
-                                    text = stringResource(R.string.darken_same_time_error),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            } else {
-                                val isOvernight =
-                                    (draftDarken.scheduleStartHour * 60 + draftDarken.scheduleStartMinute) >
-                                        (draftDarken.scheduleEndHour * 60 + draftDarken.scheduleEndMinute)
-                                Text(
-                                    text = if (isOvernight) {
-                                        stringResource(R.string.darken_overnight_hint)
-                                    } else {
-                                        stringResource(R.string.darken_sameday_hint)
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    if (!draftDarken.triggerMode.usesBatterySaver) {
-                        EditorSwitchRow(
-                            title = stringResource(R.string.darken_also_on_battery_title),
-                            description = stringResource(R.string.darken_also_on_battery_desc),
-                            checked = draftDarken.darkenOnBatterySaver,
-                            onCheckedChange = {
-                                draftDarken = draftDarken.copy(darkenOnBatterySaver = it)
-                            },
-                            switchTestTag = "toggle_darken_on_battery_saver"
-                        )
-                    }
-
-                    EditorSwitchRow(
-                        title = stringResource(R.string.darken_smart_detect_title),
-                        description = stringResource(R.string.darken_smart_detect_desc),
-                        checked = draftDarken.autoDetectDark,
-                        onCheckedChange = { draftDarken = draftDarken.copy(autoDetectDark = it) },
-                        switchTestTag = "toggle_auto_detect_dark"
-                    )
-
-                    Text(
-                        text = stringResource(R.string.darken_page_settings_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("darken_page_settings_hint")
-                    )
-                }
-            }
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-            Text(
-                text = stringResource(R.string.battery_saver_section_title),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-
             EditorSwitchRow(
                 title = stringResource(R.string.battery_saver_toggle_title),
                 description = stringResource(R.string.battery_saver_toggle_desc),
@@ -1129,122 +771,8 @@ private fun DarkenConditionsDashboardCard(
                 }
             }
         }
-
-        editingTimeField?.let { field ->
-            val initialHour = if (field == ScheduleTimeField.START) {
-                draftDarken.scheduleStartHour
-            } else {
-                draftDarken.scheduleEndHour
-            }
-            val initialMinute = if (field == ScheduleTimeField.START) {
-                draftDarken.scheduleStartMinute
-            } else {
-                draftDarken.scheduleEndMinute
-            }
-            ScheduleTimePickerDialog(
-                title = if (field == ScheduleTimeField.START) {
-                    stringResource(R.string.darken_pick_start_title)
-                } else {
-                    stringResource(R.string.darken_pick_end_title)
-                },
-                initialHour = initialHour,
-                initialMinute = initialMinute,
-                onDismiss = { editingTimeField = null },
-                onConfirm = { hour, minute ->
-                    draftDarken = if (field == ScheduleTimeField.START) {
-                        draftDarken.copy(scheduleStartHour = hour, scheduleStartMinute = minute)
-                    } else {
-                        draftDarken.copy(scheduleEndHour = hour, scheduleEndMinute = minute)
-                    }
-                    editingTimeField = null
-                }
-            )
-        }
     }
 }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ScheduleTimePickerDialog(
-    title: String,
-    initialHour: Int,
-    initialMinute: Int,
-    onDismiss: () -> Unit,
-    onConfirm: (Int, Int) -> Unit
-) {
-    val timePickerState = rememberTimePickerState(
-        initialHour = initialHour.coerceIn(0, 23),
-        initialMinute = initialMinute.coerceIn(0, 59),
-        is24Hour = true
-    )
-    var useKeyboardInput by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(
-                    onClick = { useKeyboardInput = !useKeyboardInput },
-                    modifier = Modifier.testTag("darken_time_picker_mode_toggle")
-                ) {
-                    Icon(
-                        imageVector = if (useKeyboardInput) {
-                            Icons.Default.Schedule
-                        } else {
-                            Icons.Default.Keyboard
-                        },
-                        contentDescription = if (useKeyboardInput) {
-                            stringResource(R.string.darken_switch_clock_cd)
-                        } else {
-                            stringResource(R.string.darken_switch_keyboard_cd)
-                        }
-                    )
-                }
-            }
-        },
-        text = {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                if (useKeyboardInput) {
-                    TimeInput(state = timePickerState)
-                } else {
-                    TimePicker(state = timePickerState)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onConfirm(timePickerState.hour, timePickerState.minute) },
-                modifier = Modifier.testTag("darken_time_picker_confirm")
-            ) {
-                Text(stringResource(R.string.action_confirm))
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.testTag("darken_time_picker_cancel")
-            ) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        }
-    )
-}
-
-private fun formatScheduleTime(hour: Int, minute: Int): String =
-    String.format(Locale.US, "%02d:%02d", hour.coerceIn(0, 23), minute.coerceIn(0, 59))
 
 @Composable
 private fun EntryElementSection(

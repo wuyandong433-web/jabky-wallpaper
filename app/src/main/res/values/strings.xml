@@ -14,6 +14,9 @@
     <string name="cd_apply_live_wallpaper">Apply live wallpaper</string>
     <string name="toast_save_page_failed">Could not save page settings.</string>
     <string name="toast_assign_media_failed">Could not assign this media.</string>
+    <string name="action_close">Close</string>
+    <string name="cd_conditional_menu_darken">Darken settings and preview</string>
+    <string name="cd_conditional_menu_diagnostics">Diagnostics and debug menu</string>
 
     <!-- Common Actions & States -->
     <string name="action_confirm">Confirm</string>
@@ -148,8 +151,15 @@
     <string name="darken_overnight_hint">Overnight schedule active until next morning. Tap either time to customize.</string>
     <string name="darken_sameday_hint">Same-day schedule active between start and end. Tap either time to customize.</string>
     <string name="darken_smart_detect_title">Smart dark detection</string>
-    <string name="darken_smart_detect_desc">Wallpapers detected as dark or flagged as Already dark will not be over-darkened.</string>
-    <string name="darken_page_settings_hint">Adjust each wallpaper\'s darken intensity and preview it inside Page Settings.</string>
+    <string name="darken_smart_detect_desc">Wallpapers already darker than your target or flagged Already dark are skipped.</string>
+    <string name="darken_target_brightness_title">Brightness after darken</string>
+    <string name="darken_target_brightness_desc">Normalizes bright, dim, and uneven wallpapers to the same perceived brightness.</string>
+    <string name="darken_multi_preview_title">All pages preview</string>
+    <string name="darken_preview_mode_darkened">Darkened</string>
+    <string name="darken_preview_mode_original">Original</string>
+    <string name="darken_preview_page_short">P%1$d</string>
+    <string name="darken_preview_page_dark_chip">Dark</string>
+    <string name="darken_preview_tap_hint">Tap a page badge to toggle Already dark.</string>
     <string name="darken_pick_start_title">Select schedule start time</string>
     <string name="darken_pick_end_title">Select schedule end time</string>
     <string name="darken_switch_clock_cd">Switch to clock dial</string>
@@ -158,7 +168,8 @@
     <string name="darken_summary_smart_detect">Smart detection</string>
     <string name="darken_summary_battery_saver">Power saver FPS</string>
 
-    <!-- Battery Saver (inside Darken Conditions container) -->
+    <!-- Battery Saver -->
+    <string name="battery_saver_title">Battery saver</string>
     <string name="battery_saver_section_title">Battery-saving mode</string>
     <string name="battery_saver_toggle_title">Reduce refresh rate on low power</string>
     <string name="battery_saver_toggle_desc">Passively reacts to Android battery and Battery Saver system callbacks without polling.</string>
@@ -299,7 +310,10 @@
     <string name="crop_saving">Saving…</string>
     <string name="crop_save_settings">Save page settings</string>
     <string name="crop_unable_to_load">Unable to load image</string>
-    <string name="crop_darkened_preview_badge">Darkened preview · %1$d%%</string>
+    <string name="crop_preview_mode_single">Single page</string>
+    <string name="crop_preview_mode_full">Full &amp; parallax</string>
+    <string name="crop_preview_switch_cd">Switch preview mode</string>
+    <string name="crop_split_divider_cd">Drag to resize preview and settings</string>
     <string name="crop_full_image_title">Full image: static page and parallax reach</string>
     <string name="crop_legend_static">Static page</string>
     <string name="crop_legend_reach">Maximum parallax reach</string>

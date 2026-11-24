@@ -6,15 +6,14 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,13 +30,13 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Check
@@ -47,8 +46,8 @@ import androidx.compose.material.icons.filled.Grain
 import androidx.compose.material.icons.filled.LensBlur
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Vignette
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -83,12 +82,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -97,6 +93,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
@@ -170,6 +168,11 @@ private fun calculatePreviewTravel(
         (availableRightTravel * travelAmount).coerceAtLeast(0f)
 }
 
+private enum class EditorPreviewMode {
+    SINGLE_PAGE,
+    FULL_IMAGE
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaEditorScreen(
@@ -177,6 +180,8 @@ fun MediaEditorScreen(
     page: PageItem,
     pageCount: Int,
     isSaving: Boolean,
+    initialSplitFraction: Float = 0.40f,
+    onSplitFractionChange: (Float) -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (PageItem) -> Unit
 ) {
@@ -187,8 +192,6 @@ fun MediaEditorScreen(
     var panY by remember(media.id, page.pageIndex) { mutableFloatStateOf(page.cropPanY) }
     var zoom by remember(media.id, page.pageIndex) { mutableFloatStateOf(page.cropScale) }
     var isAlreadyDark by remember(media.id, page.pageIndex) { mutableStateOf(page.isAlreadyDark) }
-    var dimFactor by remember(media.id, page.pageIndex) { mutableFloatStateOf(page.dimFactor) }
-    var previewDarkened by remember(media.id, page.pageIndex) { mutableStateOf(false) }
     var cropFillMode by remember(media.id, page.pageIndex) { mutableStateOf(page.cropFillMode) }
     var blurAmount by remember(media.id, page.pageIndex) { mutableFloatStateOf(page.blurAmount) }
     var blurStyle by remember(media.id, page.pageIndex) { mutableStateOf(page.blurStyle) }
@@ -197,9 +200,19 @@ fun MediaEditorScreen(
     var blurTintIntensity by remember(media.id, page.pageIndex) { mutableFloatStateOf(page.blurTintIntensity) }
     var blurRainbowStyle by remember(media.id, page.pageIndex) { mutableStateOf(page.blurRainbowStyle) }
     var parallaxAmount by remember(media.id, page.pageIndex) { mutableFloatStateOf(page.parallaxAmount) }
-    var expandedPreview by remember(media.id) { mutableStateOf<String?>(null) }
+    var previewMode by remember(media.id, page.pageIndex) { mutableStateOf(EditorPreviewMode.FULL_IMAGE) }
+    var splitFraction by remember {
+        mutableFloatStateOf(initialSplitFraction.coerceIn(0.22f, 0.72f))
+    }
 
-    BackHandler(enabled = !isSaving) { onDismiss() }
+    LaunchedEffect(initialSplitFraction) {
+        splitFraction = initialSplitFraction.coerceIn(0.22f, 0.72f)
+    }
+
+    BackHandler(enabled = !isSaving) {
+        onSplitFractionChange(splitFraction)
+        onDismiss()
+    }
 
     LaunchedEffect(media.id) {
         val loaded = withContext(Dispatchers.IO) {
@@ -273,7 +286,14 @@ fun MediaEditorScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onDismiss, enabled = !isSaving, modifier = Modifier.testTag("crop_back_button")) {
+                    IconButton(
+                        onClick = {
+                            onSplitFractionChange(splitFraction)
+                            onDismiss()
+                        },
+                        enabled = !isSaving,
+                        modifier = Modifier.testTag("crop_back_button")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },
@@ -295,7 +315,10 @@ fun MediaEditorScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            onSplitFractionChange(splitFraction)
+                            onDismiss()
+                        },
                         enabled = !isSaving,
                         modifier = Modifier.weight(1f).height(50.dp).testTag("crop_cancel_button"),
                         shape = RoundedCornerShape(12.dp)
@@ -304,13 +327,10 @@ fun MediaEditorScreen(
                     }
                     Button(
                         onClick = {
+                            onSplitFractionChange(splitFraction)
                             onSave(
                                 page.copy(
                                     isAlreadyDark = isAlreadyDark,
-                                    dimFactor = dimFactor.coerceIn(
-                                        PageItem.MIN_DIM_FACTOR,
-                                        PageItem.MAX_DIM_FACTOR
-                                    ),
                                     cropFillMode = cropFillMode,
                                     blurAmount = blurAmount,
                                     blurStyle = blurStyle,
@@ -341,398 +361,434 @@ fun MediaEditorScreen(
             modifier = Modifier.fillMaxSize().padding(innerPadding)
         ) {
             val availableHeight = this.maxHeight
+            val availableWidth = this.maxWidth
             val density = LocalDensity.current
-            Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                val defaultViewportHeight = (availableHeight * 0.40f).coerceIn(180.dp, 310.dp)
-                val largeViewportHeight = (availableHeight * 0.58f).coerceIn(240.dp, 420.dp)
-                val smallViewportHeight = (defaultViewportHeight * 0.62f).coerceAtLeast(120.dp)
-                val viewportHeight by animateDpAsState(
-                    targetValue = when (expandedPreview) {
-                        "page" -> largeViewportHeight
-                        "full" -> smallViewportHeight
-                        else -> defaultViewportHeight
-                    }
-                )
-                val fullImageHeight by animateDpAsState(
-                    targetValue = when (expandedPreview) {
-                        "full" -> (availableHeight * 0.42f).coerceIn(260.dp, 420.dp)
-                        "page" -> 110.dp
-                        else -> 190.dp
-                    }
-                )
-                val viewportWidth = viewportHeight * (9f / 19.5f)
-                val viewportWidthPx = with(density) { viewportWidth.toPx() }
-                val viewportHeightPx = with(density) { viewportHeight.toPx() }
-                val previewTravel = bitmap?.let {
-                    calculatePreviewTravel(
-                        sourceWidth = it.width,
-                        sourceHeight = it.height,
-                        targetWidth = viewportWidthPx,
-                        targetHeight = viewportHeightPx,
-                        scale = zoom,
-                        panX = panX,
-                        cropFillMode = cropFillMode,
-                        amount = parallaxAmount
-                    )
-                } ?: (0f to 0f)
-                val leftPreviewTravelPx = previewTravel.first
-                val rightPreviewTravelPx = previewTravel.second
-                Box(
-                    modifier = Modifier
-                        .animateContentSize()
-                        .size(width = viewportWidth, height = viewportHeight)
-                        .clip(RoundedCornerShape(18.dp))
-                        .clipToBounds()
-                        .background(Color.Black)
-                        .border(
-                            if (expandedPreview == "page") 3.dp else 2.dp,
-                            if (expandedPreview == "page") MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                            RoundedCornerShape(18.dp)
-                        )
-                        .clickable(
-                            onClick = {
-                                expandedPreview = if (expandedPreview == "page") null else "page"
-                            }
-                        )
-                        .pointerInput(bitmap, cropFillMode, zoom) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                panX = (panX + dragAmount.x / size.width * 2f).coerceIn(-1f, 1f)
-                                panY = (panY + dragAmount.y / size.height * 2f).coerceIn(-1f, 1f)
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    val source = bitmap
-                    val showDarkenedPreview = previewDarkened && !isAlreadyDark
-                    val previewBrightnessScale = if (showDarkenedPreview) {
-                        1f - dimFactor.coerceIn(PageItem.MIN_DIM_FACTOR, PageItem.MAX_DIM_FACTOR)
-                    } else {
-                        1f
-                    }
-                    if (source != null) {
-                        if (cropFillMode != CropFillMode.CROP) {
-                            Image(
-                                bitmap = (blurredBitmap ?: source).asImageBitmap(),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                colorFilter = if (previewBrightnessScale < 0.999f) {
-                                    ColorFilter.colorMatrix(
-                                        ColorMatrix().apply {
-                                            setToScale(
-                                                previewBrightnessScale,
-                                                previewBrightnessScale,
-                                                previewBrightnessScale,
-                                                1f
-                                            )
-                                        }
-                                    )
-                                } else {
-                                    null
-                                },
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .blur(if (blurredBitmap == null) (blurAmount * 20f).dp else 0.dp)
-                            )
-                        }
-                        Canvas(Modifier.fillMaxSize().clipToBounds()) {
-                            val targetWidth = size.width
-                            val targetHeight = size.height
-                            val sourceRatio = source.width.toFloat() / source.height
-                            val targetRatio = targetWidth / targetHeight
-                            val baseCropWidth = if (sourceRatio > targetRatio) {
-                                source.height * targetRatio
-                            } else {
-                                source.width.toFloat()
-                            }
-                            val baseCropHeight = if (sourceRatio > targetRatio) {
-                                source.height.toFloat()
-                            } else {
-                                source.width / targetRatio
-                            }
-                            val paint = android.graphics.Paint(
-                                android.graphics.Paint.ANTI_ALIAS_FLAG or
-                                    android.graphics.Paint.FILTER_BITMAP_FLAG
-                            ).apply {
-                                if (previewBrightnessScale < 0.999f) {
-                                    colorFilter = android.graphics.ColorMatrixColorFilter(
-                                        android.graphics.ColorMatrix().apply {
-                                            setScale(
-                                                previewBrightnessScale,
-                                                previewBrightnessScale,
-                                                previewBrightnessScale,
-                                                1f
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                            drawIntoCanvas { composeCanvas ->
-                                val nativeCanvas = composeCanvas.nativeCanvas
-                                if (cropFillMode == CropFillMode.CROP) {
-                                    val cropWidth = baseCropWidth / zoom
-                                    val cropHeight = baseCropHeight / zoom
-                                    val centerX = source.width / 2f -
-                                        panX * ((source.width - cropWidth) / 2f).coerceAtLeast(0f)
-                                    val centerY = source.height / 2f -
-                                        panY * ((source.height - cropHeight) / 2f).coerceAtLeast(0f)
-                                    val left = (centerX - cropWidth / 2f)
-                                        .coerceIn(0f, source.width - cropWidth)
-                                    val top = (centerY - cropHeight / 2f)
-                                        .coerceIn(0f, source.height - cropHeight)
-                                    val sourceLeft = left.toInt().coerceIn(0, source.width - 1)
-                                    val sourceTop = top.toInt().coerceIn(0, source.height - 1)
-                                    nativeCanvas.drawBitmap(
-                                        source,
-                                        Rect(
-                                            sourceLeft,
-                                            sourceTop,
-                                            (left + cropWidth).toInt()
-                                                .coerceIn(sourceLeft + 1, source.width),
-                                            (top + cropHeight).toInt()
-                                                .coerceIn(sourceTop + 1, source.height)
-                                        ),
-                                        Rect(0, 0, targetWidth.toInt(), targetHeight.toInt()),
-                                        paint
-                                    )
-                                } else {
-                                    val fitScale = minOf(
-                                        targetWidth / source.width,
-                                        targetHeight / source.height
-                                    ) * zoom
-                                    val imageWidth = source.width * fitScale
-                                    val imageHeight = source.height * fitScale
-                                    val centerX = targetWidth / 2f +
-                                        panX * ((imageWidth - targetWidth) / 2f).coerceAtLeast(0f)
-                                    val centerY = targetHeight / 2f +
-                                        panY * ((imageHeight - targetHeight) / 2f).coerceAtLeast(0f)
-                                    val fgDstRect = RectF(
-                                        centerX - imageWidth / 2f,
-                                        centerY - imageHeight / 2f,
-                                        centerX + imageWidth / 2f,
-                                        centerY + imageHeight / 2f
-                                    )
-                                    ImageProcessingUtils.drawForegroundShadow(nativeCanvas, fgDstRect)
-                                    nativeCanvas.drawBitmap(
-                                        source,
-                                        null,
-                                        fgDstRect,
-                                        paint
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Text(stringResource(R.string.crop_unable_to_load), color = Color.White)
-                    }
-                    if (showDarkenedPreview) {
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 8.dp)
-                                .testTag("crop_darken_preview_badge"),
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = 0.72f)
-                        ) {
-                            Text(
-                                text = stringResource(
-                                    R.string.crop_darkened_preview_badge,
-                                    (dimFactor * 100f).roundToInt()
-                                ),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                    Box(Modifier.fillMaxSize().border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(18.dp)))
-                }
+            val dividerHeight = 28.dp
+            val minPreviewHeight = 132.dp
+            val minSettingsHeight = 160.dp
+            val usableHeight = (availableHeight - dividerHeight).coerceAtLeast(minPreviewHeight)
+            val maxPreviewHeight = (usableHeight - minSettingsHeight).coerceAtLeast(minPreviewHeight)
+            val previewPaneHeight = (usableHeight * splitFraction).coerceIn(minPreviewHeight, maxPreviewHeight)
 
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    stringResource(R.string.crop_full_image_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
+            val viewportAspect = 9f / 19.5f
+            val maxViewportWidth = (availableWidth - 48.dp).coerceAtLeast(60.dp)
+            val maxViewportHeight = (previewPaneHeight - 16.dp).coerceAtLeast(100.dp)
+            val viewportHeight = minOf(maxViewportHeight, maxViewportWidth / viewportAspect)
+            val viewportWidth = viewportHeight * viewportAspect
+            val viewportWidthPx = with(density) { viewportWidth.toPx() }.coerceAtLeast(1f)
+            val viewportHeightPx = with(density) { viewportHeight.toPx() }.coerceAtLeast(1f)
+            val previewTravel = bitmap?.let {
+                calculatePreviewTravel(
+                    sourceWidth = it.width,
+                    sourceHeight = it.height,
+                    targetWidth = viewportWidthPx,
+                    targetHeight = viewportHeightPx,
+                    scale = zoom,
+                    panX = panX,
+                    cropFillMode = cropFillMode,
+                    amount = parallaxAmount
                 )
-                val isFullPreviewExpanded = expandedPreview == "full"
-                val fullPreviewBorder = if (isFullPreviewExpanded) 3.dp else 1.dp
-                val fullPreviewShape = RoundedCornerShape(14.dp)
+            } ?: (0f to 0f)
+            val leftPreviewTravelPx = previewTravel.first
+            val rightPreviewTravelPx = previewTravel.second
+
+            val switchPreviewCd = stringResource(R.string.crop_preview_switch_cd)
+            val resizeDividerCd = stringResource(R.string.crop_split_divider_cd)
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Fixed non-scrolling top preview pane
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .animateContentSize()
-                        .height(fullImageHeight + if (isFullPreviewExpanded) fullPreviewBorder * 2 else 0.dp)
-                        .clip(fullPreviewShape)
-                        .then(
-                            if (isFullPreviewExpanded) {
-                                Modifier.border(
-                                    fullPreviewBorder,
-                                    MaterialTheme.colorScheme.primary,
-                                    fullPreviewShape
-                                )
-                            } else {
-                                Modifier
-                            }
+                        .height(previewPaneHeight)
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clipToBounds()
+                        .background(Color.Black)
+                        .border(
+                            1.5.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
                         )
                         .clickable(
-                            onClick = {
-                                expandedPreview = if (isFullPreviewExpanded) null else "full"
-                            }
-                        )
-                        .testTag("crop_parallax_bounds_preview")
-                ) {
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(if (isFullPreviewExpanded) fullPreviewBorder else 0.dp)
-                        .clip(RoundedCornerShape(if (isFullPreviewExpanded) 11.dp else 14.dp))
-                        .background(Color.Black)
-                        .then(
-                            if (isFullPreviewExpanded) {
-                                Modifier
+                            onClickLabel = switchPreviewCd,
+                            role = Role.Button
+                        ) {
+                            previewMode = if (previewMode == EditorPreviewMode.SINGLE_PAGE) {
+                                EditorPreviewMode.FULL_IMAGE
                             } else {
-                                Modifier.border(
-                                    fullPreviewBorder,
-                                    MaterialTheme.colorScheme.outlineVariant,
-                                    fullPreviewShape
-                                )
+                                EditorPreviewMode.SINGLE_PAGE
                             }
-                        )
+                        }
+                        .testTag("crop_merged_preview"),
+                    contentAlignment = Alignment.Center
                 ) {
-                    val source = bitmap ?: return@Canvas
-                    val imageScale = minOf(size.width / source.width, size.height / source.height)
-                    val imageWidth = source.width * imageScale
-                    val imageHeight = source.height * imageScale
-                    val imageLeft = (size.width - imageWidth) / 2f
-                    val imageTop = (size.height - imageHeight) / 2f
-                    val targetRatio = viewportWidthPx / viewportHeightPx
-                    val sourceRatio = source.width.toFloat() / source.height
-                    val baseCropWidth = if (sourceRatio > targetRatio) {
-                        source.height * targetRatio
+                    val source = bitmap
+                    if (previewMode == EditorPreviewMode.SINGLE_PAGE) {
+                        val singlePageShape = RoundedCornerShape((viewportWidth * 0.09f).coerceIn(6.dp, 12.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(width = viewportWidth, height = viewportHeight)
+                                .clip(singlePageShape)
+                                .clipToBounds()
+                                .background(Color.Black)
+                                .border(
+                                    2.dp,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                    singlePageShape
+                                )
+                                .pointerInput(bitmap, cropFillMode, zoom) {
+                                    detectDragGestures { change, dragAmount ->
+                                        change.consume()
+                                        panX = (panX + dragAmount.x / size.width * 2f).coerceIn(-1f, 1f)
+                                        panY = (panY + dragAmount.y / size.height * 2f).coerceIn(-1f, 1f)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (source != null) {
+                                if (cropFillMode != CropFillMode.CROP) {
+                                    Image(
+                                        bitmap = (blurredBitmap ?: source).asImageBitmap(),
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .blur(if (blurredBitmap == null) (blurAmount * 20f).dp else 0.dp)
+                                    )
+                                }
+                                Canvas(Modifier.fillMaxSize().clipToBounds()) {
+                                    val targetWidth = size.width
+                                    val targetHeight = size.height
+                                    val sourceRatio = source.width.toFloat() / source.height
+                                    val targetRatio = targetWidth / targetHeight
+                                    val baseCropWidth = if (sourceRatio > targetRatio) {
+                                        source.height * targetRatio
+                                    } else {
+                                        source.width.toFloat()
+                                    }
+                                    val baseCropHeight = if (sourceRatio > targetRatio) {
+                                        source.height.toFloat()
+                                    } else {
+                                        source.width / targetRatio
+                                    }
+                                    val drawPaint = Paint(
+                                        Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG
+                                    )
+                                    drawIntoCanvas { composeCanvas ->
+                                        val nativeCanvas = composeCanvas.nativeCanvas
+                                        if (cropFillMode == CropFillMode.CROP) {
+                                            val cropWidth = baseCropWidth / zoom
+                                            val cropHeight = baseCropHeight / zoom
+                                            val centerX = source.width / 2f -
+                                                panX * ((source.width - cropWidth) / 2f).coerceAtLeast(0f)
+                                            val centerY = source.height / 2f -
+                                                panY * ((source.height - cropHeight) / 2f).coerceAtLeast(0f)
+                                            val left = (centerX - cropWidth / 2f)
+                                                .coerceIn(0f, source.width - cropWidth)
+                                            val top = (centerY - cropHeight / 2f)
+                                                .coerceIn(0f, source.height - cropHeight)
+                                            val sourceLeft = left.toInt().coerceIn(0, source.width - 1)
+                                            val sourceTop = top.toInt().coerceIn(0, source.height - 1)
+                                            nativeCanvas.drawBitmap(
+                                                source,
+                                                Rect(
+                                                    sourceLeft,
+                                                    sourceTop,
+                                                    (left + cropWidth).toInt()
+                                                        .coerceIn(sourceLeft + 1, source.width),
+                                                    (top + cropHeight).toInt()
+                                                        .coerceIn(sourceTop + 1, source.height)
+                                                ),
+                                                Rect(0, 0, targetWidth.toInt(), targetHeight.toInt()),
+                                                drawPaint
+                                            )
+                                        } else {
+                                            val fitScale = minOf(
+                                                targetWidth / source.width,
+                                                targetHeight / source.height
+                                            ) * zoom
+                                            val imageWidth = source.width * fitScale
+                                            val imageHeight = source.height * fitScale
+                                            val centerX = targetWidth / 2f +
+                                                panX * ((imageWidth - targetWidth) / 2f).coerceAtLeast(0f)
+                                            val centerY = targetHeight / 2f +
+                                                panY * ((imageHeight - targetHeight) / 2f).coerceAtLeast(0f)
+                                            val fgDstRect = RectF(
+                                                centerX - imageWidth / 2f,
+                                                centerY - imageHeight / 2f,
+                                                centerX + imageWidth / 2f,
+                                                centerY + imageHeight / 2f
+                                            )
+                                            ImageProcessingUtils.drawForegroundShadow(nativeCanvas, fgDstRect)
+                                            nativeCanvas.drawBitmap(
+                                                source,
+                                                null,
+                                                fgDstRect,
+                                                drawPaint
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text(stringResource(R.string.crop_unable_to_load), color = Color.White)
+                            }
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), singlePageShape)
+                            )
+                        }
                     } else {
-                        source.width.toFloat()
-                    }
-                    val baseCropHeight = if (sourceRatio > targetRatio) {
-                        source.height.toFloat()
-                    } else {
-                        source.width / targetRatio
-                    }
-                    val frameLeft: Float
-                    val frameRight: Float
-                    val frameTop: Float
-                    val frameBottom: Float
-                    val sourcePerViewportPixel: Float
-                    if (cropFillMode == CropFillMode.CROP) {
-                        val cropWidth = baseCropWidth / zoom
-                        val cropHeight = baseCropHeight / zoom
-                        val cropCenterX = source.width / 2f -
-                            panX * ((source.width - cropWidth) / 2f).coerceAtLeast(0f)
-                        val cropCenterY = source.height / 2f -
-                            panY * ((source.height - cropHeight) / 2f).coerceAtLeast(0f)
-                        frameLeft = (cropCenterX - cropWidth / 2f)
-                            .coerceIn(0f, source.width - cropWidth)
-                        frameRight = frameLeft + cropWidth
-                        frameTop = (cropCenterY - cropHeight / 2f)
-                            .coerceIn(0f, source.height - cropHeight)
-                        frameBottom = frameTop + cropHeight
-                        sourcePerViewportPixel = cropWidth / viewportWidthPx
-                    } else {
-                        val imageFitScale = minOf(
-                            viewportWidthPx / source.width,
-                            viewportHeightPx / source.height
-                        ) * zoom
-                        val drawWidth = source.width * imageFitScale
-                        val drawHeight = source.height * imageFitScale
-                        val imageLeftInViewport = viewportWidthPx / 2f +
-                            panX * ((drawWidth - viewportWidthPx) / 2f).coerceAtLeast(0f) -
-                            drawWidth / 2f
-                        val imageTopInViewport = viewportHeightPx / 2f +
-                            panY * ((drawHeight - viewportHeightPx) / 2f).coerceAtLeast(0f) -
-                            drawHeight / 2f
-                        frameLeft = ((-imageLeftInViewport) / imageFitScale)
-                            .coerceIn(0f, source.width.toFloat())
-                        frameRight = ((viewportWidthPx - imageLeftInViewport) / imageFitScale)
-                            .coerceIn(frameLeft, source.width.toFloat())
-                        frameTop = ((-imageTopInViewport) / imageFitScale)
-                            .coerceIn(0f, source.height.toFloat())
-                        frameBottom = ((viewportHeightPx - imageTopInViewport) / imageFitScale)
-                            .coerceIn(frameTop, source.height.toFloat())
-                        sourcePerViewportPixel = 1f / imageFitScale
-                    }
-                    val leftSourceTravel = leftPreviewTravelPx * sourcePerViewportPixel
-                    val rightSourceTravel = rightPreviewTravelPx * sourcePerViewportPixel
-                    val reachLeft = (frameLeft - leftSourceTravel).coerceAtLeast(0f)
-                    val reachRight = (frameRight + rightSourceTravel)
-                        .coerceAtMost(source.width.toFloat())
-                    val nativeCanvas = drawContext.canvas.nativeCanvas
-                    val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-                    nativeCanvas.drawBitmap(
-                        source,
-                        null,
-                        RectF(imageLeft, imageTop, imageLeft + imageWidth, imageTop + imageHeight),
-                        imagePaint
-                    )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("crop_parallax_bounds_preview")
+                        ) {
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(8.dp)
+                            ) {
+                                val src = source ?: return@Canvas
+                                val imageScale = minOf(size.width / src.width, size.height / src.height)
+                                val imageWidth = src.width * imageScale
+                                val imageHeight = src.height * imageScale
+                                val imageLeft = (size.width - imageWidth) / 2f
+                                val imageTop = (size.height - imageHeight) / 2f
+                                val targetRatio = viewportWidthPx / viewportHeightPx
+                                val sourceRatio = src.width.toFloat() / src.height
+                                val baseCropWidth = if (sourceRatio > targetRatio) {
+                                    src.height * targetRatio
+                                } else {
+                                    src.width.toFloat()
+                                }
+                                val baseCropHeight = if (sourceRatio > targetRatio) {
+                                    src.height.toFloat()
+                                } else {
+                                    src.width / targetRatio
+                                }
+                                val frameLeft: Float
+                                val frameRight: Float
+                                val frameTop: Float
+                                val frameBottom: Float
+                                val sourcePerViewportPixel: Float
+                                if (cropFillMode == CropFillMode.CROP) {
+                                    val cropWidth = baseCropWidth / zoom
+                                    val cropHeight = baseCropHeight / zoom
+                                    val cropCenterX = src.width / 2f -
+                                        panX * ((src.width - cropWidth) / 2f).coerceAtLeast(0f)
+                                    val cropCenterY = src.height / 2f -
+                                        panY * ((src.height - cropHeight) / 2f).coerceAtLeast(0f)
+                                    frameLeft = (cropCenterX - cropWidth / 2f)
+                                        .coerceIn(0f, src.width - cropWidth)
+                                    frameRight = frameLeft + cropWidth
+                                    frameTop = (cropCenterY - cropHeight / 2f)
+                                        .coerceIn(0f, src.height - cropHeight)
+                                    frameBottom = frameTop + cropHeight
+                                    sourcePerViewportPixel = cropWidth / viewportWidthPx
+                                } else {
+                                    val imageFitScale = minOf(
+                                        viewportWidthPx / src.width,
+                                        viewportHeightPx / src.height
+                                    ) * zoom
+                                    val drawWidth = src.width * imageFitScale
+                                    val drawHeight = src.height * imageFitScale
+                                    val imageLeftInViewport = viewportWidthPx / 2f +
+                                        panX * ((drawWidth - viewportWidthPx) / 2f).coerceAtLeast(0f) -
+                                        drawWidth / 2f
+                                    val imageTopInViewport = viewportHeightPx / 2f +
+                                        panY * ((drawHeight - viewportHeightPx) / 2f).coerceAtLeast(0f) -
+                                        drawHeight / 2f
+                                    frameLeft = ((-imageLeftInViewport) / imageFitScale)
+                                        .coerceIn(0f, src.width.toFloat())
+                                    frameRight = ((viewportWidthPx - imageLeftInViewport) / imageFitScale)
+                                        .coerceIn(frameLeft, src.width.toFloat())
+                                    frameTop = ((-imageTopInViewport) / imageFitScale)
+                                        .coerceIn(0f, src.height.toFloat())
+                                    frameBottom = ((viewportHeightPx - imageTopInViewport) / imageFitScale)
+                                        .coerceIn(frameTop, src.height.toFloat())
+                                    sourcePerViewportPixel = 1f / imageFitScale
+                                }
+                                val leftSourceTravel = leftPreviewTravelPx * sourcePerViewportPixel
+                                val rightSourceTravel = rightPreviewTravelPx * sourcePerViewportPixel
+                                val reachLeft = (frameLeft - leftSourceTravel).coerceAtLeast(0f)
+                                val reachRight = (frameRight + rightSourceTravel)
+                                    .coerceAtMost(src.width.toFloat())
+                                val nativeCanvas = drawContext.canvas.nativeCanvas
+                                val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                                nativeCanvas.drawBitmap(
+                                    src,
+                                    null,
+                                    RectF(imageLeft, imageTop, imageLeft + imageWidth, imageTop + imageHeight),
+                                    imagePaint
+                                )
 
-                    val mapX = { x: Float -> imageLeft + x * imageScale }
-                    val mapY = { y: Float -> imageTop + y * imageScale }
-                    val reachBounds = RectF(
-                        mapX(reachLeft),
-                        mapY(frameTop),
-                        mapX(reachRight),
-                        mapY(frameBottom)
-                    )
-                    val staticBounds = RectF(
-                        mapX(frameLeft),
-                        mapY(frameTop),
-                        mapX(frameRight),
-                        mapY(frameBottom)
-                    )
-                    val reachStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color = android.graphics.Color.rgb(255, 180, 0)
-                        style = Paint.Style.STROKE
-                        strokeWidth = 2.dp.toPx()
+                                val mapX = { x: Float -> imageLeft + x * imageScale }
+                                val mapY = { y: Float -> imageTop + y * imageScale }
+                                val reachBounds = RectF(
+                                    mapX(reachLeft),
+                                    mapY(frameTop),
+                                    mapX(reachRight),
+                                    mapY(frameBottom)
+                                )
+                                val staticBounds = RectF(
+                                    mapX(frameLeft),
+                                    mapY(frameTop),
+                                    mapX(frameRight),
+                                    mapY(frameBottom)
+                                )
+                                val reachStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                    color = android.graphics.Color.rgb(255, 180, 0)
+                                    style = Paint.Style.STROKE
+                                    strokeWidth = 2.dp.toPx()
+                                }
+                                val staticStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                    color = android.graphics.Color.rgb(80, 220, 255)
+                                    style = Paint.Style.STROKE
+                                    strokeWidth = 2.dp.toPx()
+                                }
+                                nativeCanvas.drawRect(reachBounds, reachStroke)
+                                nativeCanvas.drawRect(staticBounds, staticStroke)
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 8.dp, start = 10.dp, end = 10.dp),
+                                shape = CircleShape,
+                                color = Color.Black.copy(alpha = 0.72f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF50DCFF))
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.crop_legend_static),
+                                            color = Color(0xFF50DCFF),
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFFFFB400))
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.crop_legend_reach),
+                                            color = Color(0xFFFFB400),
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
-                    val staticStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color = android.graphics.Color.rgb(80, 220, 255)
-                        style = Paint.Style.STROKE
-                        strokeWidth = 2.dp.toPx()
-                    }
-                    nativeCanvas.drawRect(reachBounds, reachStroke)
-                    nativeCanvas.drawRect(staticBounds, staticStroke)
-                }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        stringResource(R.string.crop_legend_static),
-                        color = Color(0xFF50DCFF),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text(
-                        stringResource(R.string.crop_legend_reach),
-                        color = Color(0xFFFFB400),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                Text(
-                    stringResource(R.string.crop_edge_reach_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
 
-                Spacer(Modifier.height(16.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    // Mode indicator pill in top-right corner of merged preview
+                    Surface(
+                        onClick = {
+                            previewMode = if (previewMode == EditorPreviewMode.SINGLE_PAGE) {
+                                EditorPreviewMode.FULL_IMAGE
+                            } else {
+                                EditorPreviewMode.SINGLE_PAGE
+                            }
+                        },
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.68f),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .testTag("crop_preview_mode_pill")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (previewMode == EditorPreviewMode.SINGLE_PAGE) {
+                                    Icons.Default.Smartphone
+                                } else {
+                                    Icons.Default.AspectRatio
+                                },
+                                contentDescription = switchPreviewCd,
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = stringResource(
+                                    if (previewMode == EditorPreviewMode.SINGLE_PAGE) {
+                                        R.string.crop_preview_mode_single
+                                    } else {
+                                        R.string.crop_preview_mode_full
+                                    }
+                                ),
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+
+                // Android split-screen-style draggable resize handle
+                val usableHeightPx = with(density) { usableHeight.toPx() }.coerceAtLeast(1f)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(dividerHeight)
+                        .semantics { contentDescription = resizeDividerCd }
+                        .pointerInput(usableHeightPx) {
+                            detectVerticalDragGestures(
+                                onDragEnd = { onSplitFractionChange(splitFraction) },
+                                onDragCancel = { onSplitFractionChange(splitFraction) }
+                            ) { change, dragAmount ->
+                                change.consume()
+                                splitFraction = (splitFraction + dragAmount / usableHeightPx)
+                                    .coerceIn(0.22f, 0.72f)
+                            }
+                        }
+                        .testTag("crop_split_divider"),
+                    contentAlignment = Alignment.Center
                 ) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
+                        thickness = 1.dp
+                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                        modifier = Modifier.size(width = 44.dp, height = 5.dp)
+                    ) {}
+                }
+
+                // Scrollable bottom settings pane
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1067,76 +1123,10 @@ fun MediaEditorScreen(
                                 modifier = Modifier.testTag("toggle_is_already_dark")
                             )
                         }
-                        AnimatedVisibility(visible = !isAlreadyDark) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Visibility,
-                                            contentDescription = null,
-                                            tint = if (previewDarkened) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            }
-                                        )
-                                        Spacer(Modifier.width(10.dp))
-                                        Column {
-                                            Text(
-                                                stringResource(R.string.crop_preview_darkened),
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                            Text(
-                                                stringResource(R.string.crop_preview_darkened_desc),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                    Switch(
-                                        checked = previewDarkened,
-                                        onCheckedChange = { previewDarkened = it },
-                                        modifier = Modifier.testTag("toggle_preview_darkened")
-                                    )
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.crop_darken_intensity),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = stringResource(R.string.percent_value, (dimFactor * 100f).roundToInt()),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Slider(
-                                    value = dimFactor,
-                                    onValueChange = { dimFactor = it },
-                                    valueRange = PageItem.MIN_DIM_FACTOR..PageItem.MAX_DIM_FACTOR,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("page_dim_factor_slider")
-                                )
-                            }
-                        }
                     }
                 }
                 Spacer(Modifier.height(20.dp))
+                }
             }
         }
     }

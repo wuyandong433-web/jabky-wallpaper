@@ -1,6 +1,7 @@
 package com.example.service
 
 import android.app.KeyguardManager
+import android.app.WallpaperColors
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -25,8 +26,10 @@ import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.ViewConfiguration
+import androidx.annotation.RequiresApi
 import com.example.darken.ExtraDimDetector
 import com.example.data.model.CalibrationConfig
+import com.example.data.model.PageItem
 import com.example.data.model.WallpaperAppState
 import com.example.diagnostics.WallpaperDiagnosticsRecorder
 import com.example.diagnostics.WallpaperSignalOverlayWindow
@@ -50,6 +53,7 @@ import java.util.concurrent.CopyOnWriteArraySet
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
+import kotlin.math.roundToInt
 
 private const val OFFSET_EPSILON = 0.00005f
 private const val STATIC_OFFSET_TOLERANCE = 0.002f
@@ -60,6 +64,50 @@ private const val ENTRY_FIRST_FRAME_WAIT_LIMIT_NANOS = 1_000_000_000L
 private const val MOTION_BLUR_DOWNSAMPLE_FACTOR = 2
 private const val MOTION_BLUR_SHUTTER_FRACTION = 1.0f
 private const val MAX_MOTION_BLUR_FRAME_GAP_NANOS = 200_000_000L
+private const val DARK_SURFACE_PRIMARY_COLOR = 0xFF0A0D14.toInt()
+private const val FALLBACK_SURFACE_PRIMARY_COLOR = 0xFF121622.toInt()
+
+object WallpaperStatusBarColorPolicy {
+    @RequiresApi(Build.VERSION_CODES.O_MR1)
+    fun computeWallpaperColors(
+        activePage: PageItem?,
+        darkenActive: Boolean,
+        shouldDarkenActivePage: Boolean,
+        targetBrightness: Float,
+        bitmapProvider: (darkened: Boolean) -> Bitmap?
+    ): WallpaperColors {
+        val forceDarkStatusBarSurface =
+            activePage?.isAlreadyDark == true ||
+                (darkenActive && shouldDarkenActivePage && targetBrightness <= 0.45f)
+
+        if (forceDarkStatusBarSurface) {
+            val darkPrimary = Color.valueOf(DARK_SURFACE_PRIMARY_COLOR)
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                WallpaperColors(
+                    darkPrimary,
+                    null,
+                    null,
+                    WallpaperColors.HINT_SUPPORTS_DARK_THEME
+                )
+            } else {
+                WallpaperColors(darkPrimary, null, null)
+            }
+        }
+
+        val effectiveDarken = darkenActive && shouldDarkenActivePage
+        val bitmap = bitmapProvider(effectiveDarken)?.takeUnless { it.isRecycled }
+        if (bitmap != null) {
+            return WallpaperColors.fromBitmap(bitmap)
+        }
+
+        val fallback = Color.valueOf(FALLBACK_SURFACE_PRIMARY_COLOR)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            WallpaperColors(fallback, null, null, WallpaperColors.HINT_SUPPORTS_DARK_THEME)
+        } else {
+            WallpaperColors(fallback, null, null)
+        }
+    }
+}
 
 class MultiPageWallpaperService : WallpaperService() {
 
@@ -166,6 +214,7 @@ class MultiPageWallpaperService : WallpaperService() {
         private var entryAwaitingFirstFrame = false
         private var entryTriggeredAtNanos = 0L
         private var pendingEntryOnUnlock = false
+        private var lastColorSignature: String? = null
 
         private val repoChangeListener: () -> Unit = {
             if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -173,6 +222,66 @@ class MultiPageWallpaperService : WallpaperService() {
             } else {
                 mainHandler.post { handleRepositoryChange() }
             }
+        }
+
+        private fun activeColorPageIndex(state: WallpaperAppState): Int {
+            val pageCount = state.calibration.pageCount.coerceAtLeast(1)
+            return getPagePosition(renderedXOffset, state).roundToInt()
+                .coerceIn(0, pageCount - 1)
+        }
+
+        private fun currentColorSignature(state: WallpaperAppState): String {
+            val pageIdx = activeColorPageIndex(state)
+            val page = state.pages.find { it.pageIndex == pageIdx }
+            val darkenActive = darkenTransitionController.targetMix >= 0.5f ||
+                darkenTransitionController.currentMix >= 0.5f
+            return buildString {
+                append(pageIdx).append('|')
+                append(page?.isAlreadyDark == true).append('|')
+                append(darkenActive).append('|')
+                append(state.darken.targetBrightness).append('|')
+                append(repository.bitmapGeneration).append('|')
+                append(repository.darkenedBitmapGeneration)
+            }
+        }
+
+        private fun maybeNotifyColorsChanged() {
+            if (engineDestroyed || Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) return
+            val state = repository.appState.value
+            val sig = currentColorSignature(state)
+            if (sig != lastColorSignature) {
+                lastColorSignature = sig
+                try {
+                    notifyColorsChanged()
+                } catch (e: Exception) {
+                    Log.w("MultiPageWallpaper", "Failed to notify wallpaper colors changed", e)
+                }
+            }
+        }
+
+        @RequiresApi(Build.VERSION_CODES.O_MR1)
+        override fun onComputeColors(): WallpaperColors {
+            val state = repository.appState.value
+            val activeIdx = activeColorPageIndex(state)
+            val activePage = state.pages.find { it.pageIndex == activeIdx }
+            val darkenActive = darkenTransitionController.targetMix >= 0.5f ||
+                darkenTransitionController.currentMix >= 0.5f
+            val shouldDarken = repository.shouldDarkenPage(activePage, state.darken)
+            lastColorSignature = currentColorSignature(state)
+            return WallpaperStatusBarColorPolicy.computeWallpaperColors(
+                activePage = activePage,
+                darkenActive = darkenActive,
+                shouldDarkenActivePage = shouldDarken,
+                targetBrightness = state.darken.targetBrightness,
+                bitmapProvider = { darkened ->
+                    repository.getCroppedBitmap(
+                        pageIndex = activeIdx,
+                        reqWidth = 108,
+                        reqHeight = 240,
+                        darkened = darkened
+                    )
+                }
+            )
         }
 
         private fun syncDarkenState(
@@ -195,6 +304,7 @@ class MultiPageWallpaperService : WallpaperService() {
             } else {
                 darkenTransitionController.snapTo(shouldDarken)
             }
+            maybeNotifyColorsChanged()
         }
 
         fun onSystemConfigurationChanged(isDarkMode: Boolean) {
@@ -248,6 +358,7 @@ class MultiPageWallpaperService : WallpaperService() {
             syncSignalOverlayWindow()
             nextAnimationFrameDeadlineNanos = 0L
             updateSurfaceFrameRate()
+            maybeNotifyColorsChanged()
             if (isVisible && isOffsetAnimationNeeded()) {
                 scheduleOffsetAnimationFrame()
             } else {
@@ -374,6 +485,7 @@ class MultiPageWallpaperService : WallpaperService() {
                     syncDarkenState(state = state, animateIfVisible = true)
                 }
                 syncSignalOverlayWindow()
+                maybeNotifyColorsChanged()
                 drawFrame()
                 if (isOffsetAnimationNeeded()) {
                     scheduleOffsetAnimationFrame()
@@ -455,6 +567,7 @@ class MultiPageWallpaperService : WallpaperService() {
         override fun onSurfaceCreated(holder: SurfaceHolder) {
             super.onSurfaceCreated(holder)
             getGpuRenderer()?.onSurfaceChanged(holder.surface, surfaceWidth, surfaceHeight)
+            maybeNotifyColorsChanged()
             if (isVisible && surfaceWidth > 0 && surfaceHeight > 0) {
                 drawFrame()
                 if (isOffsetAnimationNeeded()) {
@@ -612,6 +725,7 @@ class MultiPageWallpaperService : WallpaperService() {
             if (loggedOffsetSignal) {
                 syncSignalOverlayWindow()
             }
+            maybeNotifyColorsChanged()
 
             if (isVisible) {
                 if (isOffsetAnimationNeeded()) {
@@ -716,6 +830,7 @@ class MultiPageWallpaperService : WallpaperService() {
                 sawZeroOffsetWhileHidden = false
                 repository.saveLastKnownOffset(currentXOffset)
                 syncSignalOverlayWindow()
+                maybeNotifyColorsChanged()
                 if (isVisible) {
                     drawFrame()
                     if (isOffsetAnimationNeeded()) {

@@ -91,7 +91,9 @@ internal class WallpaperDiagnosticsSession(
         visibleOffsetCallbacks++
 
         val previousOffset = lastOffset
-        if (previousOffset != null && abs(xOffset - previousOffset) > OFFSET_CHANGE_EPSILON) {
+        if (previousOffset == null) {
+            lastChangedOffsetNanos = timestampNanos
+        } else if (abs(xOffset - previousOffset) > OFFSET_CHANGE_EPSILON) {
             changedOffsetCallbacks++
             lastChangedOffsetNanos?.let { previousTimestamp ->
                 val interval = timestampNanos - previousTimestamp

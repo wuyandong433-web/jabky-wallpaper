@@ -472,6 +472,7 @@ class ExampleUnitTest {
             triggerMode = DarkenTriggerMode.BOTH_OR,
             autoDetectDark = true,
             luminanceThreshold = 0.35f,
+            targetBrightness = 0.28f,
             dimFactor = 0.45f,
             scheduleStartHour = 21,
             scheduleStartMinute = 30,
@@ -487,11 +488,24 @@ class ExampleUnitTest {
         assertTrue(restored.useSchedule)
         assertTrue(restored.isEnabled)
         assertTrue(restored.autoDetectDark)
+        assertEquals(0.28f, restored.targetBrightness, 0.001f)
         assertEquals(0.45f, restored.dimFactor, 0.001f)
         assertEquals(21, restored.scheduleStartHour)
         assertEquals(30, restored.scheduleStartMinute)
         assertEquals(6, restored.scheduleEndHour)
         assertEquals(45, restored.scheduleEndMinute)
+
+        // Legacy JSON without targetBrightness migrates from dimFactor
+        val legacyJson = JSONObject()
+            .put("enabled", true)
+            .put("triggerMode", "DARK_MODE_ONLY")
+            .put("dimFactor", 0.60)
+        val migrated = DarkenConfig.fromJson(legacyJson)
+        assertTrue(
+            "Expected migrated targetBrightness in allowed range, got ${migrated.targetBrightness}",
+            migrated.targetBrightness in DarkenConfig.MIN_TARGET_BRIGHTNESS..DarkenConfig.MAX_TARGET_BRIGHTNESS
+        )
+        assertTrue(migrated.targetBrightness < 0.35f)
 
         val page = PageItem(pageIndex = 0, dimFactor = 0.65f)
         val restoredPage = PageItem.fromJson(page.toJson())

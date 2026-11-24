@@ -9,11 +9,15 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -21,6 +25,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Brightness4
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
@@ -40,12 +46,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -53,11 +62,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.darken.ExtraDimDetector
 import com.example.diagnostics.WallpaperDiagnosticsRecorder
+import com.example.power.BatterySaverPolicy
 import com.example.ui.AppLocaleHelper
 import com.example.ui.ProvideAppLocale
 import com.example.ui.WallpaperViewModel
+import com.example.ui.components.DarkenConditionalDialog
+import com.example.ui.screens.DiagnosticsConditionalDialog
 import com.example.ui.screens.EffectsScreen
 import com.example.ui.screens.MediaEditorScreen
 import com.example.ui.screens.MediaLibraryScreen
@@ -121,10 +135,22 @@ private fun MainAppScaffoldContent(viewModel: WallpaperViewModel) {
     var editingPageIndex by remember { mutableStateOf<Int?>(null) }
     var isSavingMedia by remember { mutableStateOf(false) }
     var isAssigningMedia by remember { mutableStateOf(false) }
+    var showDarkenDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
 
     val isWallpaperActive by viewModel.isWallpaperActive.collectAsState()
     val appState by viewModel.appState.collectAsState()
     val originals by viewModel.originals.collectAsState()
+    val editorSplitFraction by viewModel.editorPreviewSplitFraction.collectAsState()
+    val isSystemDarkMode by viewModel.isSystemDarkMode.collectAsState()
+    val powerSnapshot by viewModel.powerSnapshot.collectAsState()
+    val diagnostics by WallpaperDiagnosticsRecorder.state.collectAsState()
+    val darkThemeInUi = isSystemInDarkTheme()
+
+    LaunchedEffect(darkThemeInUi) {
+        viewModel.refreshSystemDarkMode(darkThemeInUi)
+    }
+
     val pageToEdit = editingPageIndex?.let { index ->
         appState.pages.find { it.pageIndex == index }?.let { page ->
             originals.find { it.id == page.originalId }?.let { media -> index to (page to media) }
@@ -138,6 +164,8 @@ private fun MainAppScaffoldContent(viewModel: WallpaperViewModel) {
             page = page,
             pageCount = appState.calibration.pageCount,
             isSaving = isSavingMedia,
+            initialSplitFraction = editorSplitFraction,
+            onSplitFractionChange = viewModel::updateEditorPreviewSplitFraction,
             onDismiss = { if (!isSavingMedia) editingPageIndex = null },
             onSave = { updatedPage ->
                 val screenWidth = context.resources.displayMetrics.widthPixels
@@ -193,11 +221,128 @@ private fun MainAppScaffoldContent(viewModel: WallpaperViewModel) {
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
                 CenterAlignedTopAppBar(
+                    navigationIcon = {
+                        Row(
+                            modifier = Modifier.padding(start = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AnimatedVisibility(visible = selectedTab == AppTab.STUDIO) {
+                                val isBatterySaverActive = BatterySaverPolicy.isBatterySaverActive(
+                                    appState.batterySaver,
+                                    powerSnapshot
+                                )
+                                val isDarkenActiveNow = ExtraDimDetector.isDimConditionActive(
+                                    context = context,
+                                    config = appState.darken,
+                                    isDarkModeOverride = isSystemDarkMode,
+                                    isBatterySaverActive = isBatterySaverActive
+                                )
+                                val darkenContainerColor = when {
+                                    appState.darken.enabled && isDarkenActiveNow -> Color(0xFFF59E0B).copy(alpha = 0.22f)
+                                    appState.darken.enabled -> MaterialTheme.colorScheme.primaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                                }
+                                val darkenIconColor = when {
+                                    appState.darken.enabled && isDarkenActiveNow -> Color(0xFFD97706)
+                                    appState.darken.enabled -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                val darkenCd = stringResource(R.string.cd_conditional_menu_darken)
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .clickable(
+                                            onClickLabel = darkenCd,
+                                            role = Role.Button
+                                        ) {
+                                            showDarkenDialog = true
+                                        }
+                                        .testTag("conditional_menu_darken"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = darkenContainerColor,
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Brightness4,
+                                                contentDescription = darkenCd,
+                                                tint = darkenIconColor,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            if (appState.darken.enabled && isDarkenActiveNow) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .align(Alignment.TopEnd)
+                                                        .padding(4.dp)
+                                                        .size(7.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color(0xFF10B981))
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(visible = selectedTab == AppTab.SETTINGS) {
+                                val hasOverlay = appState.showOffsetDebugOverlay ||
+                                    appState.showFrameDebugIndicator ||
+                                    appState.showSignalDebugOverlay
+                                val diagContainerColor = when {
+                                    diagnostics.isRecording -> MaterialTheme.colorScheme.errorContainer
+                                    hasOverlay -> MaterialTheme.colorScheme.primaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                                }
+                                val diagIconColor = when {
+                                    diagnostics.isRecording -> MaterialTheme.colorScheme.error
+                                    hasOverlay -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                val diagCd = stringResource(R.string.cd_conditional_menu_diagnostics)
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .clickable(
+                                            onClickLabel = diagCd,
+                                            role = Role.Button
+                                        ) {
+                                            showDiagnosticsDialog = true
+                                        }
+                                        .testTag("conditional_menu_diagnostics"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = diagContainerColor,
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.BugReport,
+                                                contentDescription = diagCd,
+                                                tint = diagIconColor,
+                                                modifier = Modifier.size(19.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                     title = {
                         Text(
                             text = stringResource(R.string.app_name),
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     },
                     colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -303,6 +448,28 @@ private fun MainAppScaffoldContent(viewModel: WallpaperViewModel) {
                     }
                 }
             }
+        }
+
+        if (showDarkenDialog && selectedTab == AppTab.STUDIO) {
+            DarkenConditionalDialog(
+                appState = appState,
+                isSystemDarkMode = isSystemDarkMode,
+                loadPageThumbnail = { pageIndex ->
+                    viewModel.loadPagePreviewBitmap(pageIndex, 180, 320)
+                },
+                onDismiss = { showDarkenDialog = false },
+                onConfirm = { newDarken, alreadyDarkFlags ->
+                    viewModel.updateDarkenAndPageFlags(newDarken, alreadyDarkFlags)
+                    showDarkenDialog = false
+                }
+            )
+        }
+
+        if (showDiagnosticsDialog && selectedTab == AppTab.SETTINGS) {
+            DiagnosticsConditionalDialog(
+                viewModel = viewModel,
+                onDismiss = { showDiagnosticsDialog = false }
+            )
         }
     }
 }
